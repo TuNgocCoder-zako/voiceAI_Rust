@@ -26,6 +26,9 @@ struct Args {
     #[arg(short = 'l', long, help = "Chế độ nghe qua Microphone thời gian thực (Voice Chat)")]
     listen: bool,
 
+    #[arg(short = 'm', long, help = "Chỉ định thủ công mô hình LLM (Bỏ qua tự động định tuyến)")]
+    model: Option<String>,
+
     #[arg(long, help = "Gửi tín hiệu đánh thức tới trợ lý đang chạy nền")]
     trigger: bool,
 
@@ -126,6 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let recorder = AudioRecorder::new();
     let whisper = WhisperEngine::new();
     let ollama = voice_ai::ai::OllamaClient::new(&config.ollama_url, &config.model);
+    let model_router = voice_ai::ai::ModelRouter::new(&config.ollama_url);
 
     // 3. Single Query Execution
     if let Some(q) = args.query {
@@ -136,35 +140,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 tts.speak(&reply, None);
             }
         } else {
-            println!("🌐 [Deep-Path LLM]: Đang truy vấn Ollama ({})...", config.model);
-            let messages = vec![
-                voice_ai::ai::ChatMessage {
-                    role: "system".to_string(),
-                    content: voice_ai::ai::ollama::SYSTEM_PROMPT.to_string(),
-                },
-                voice_ai::ai::ChatMessage {
-                    role: "user".to_string(),
-                    content: q,
-                },
-            ];
-            match ollama.chat(messages, |chunk| {
-                print!("{}", chunk);
-                let _ = io::stdout().flush();
-            }).await {
-                Ok(reply) => {
-                    println!();
-                    if args.voice && tts.is_available() {
-                        tts.speak(&reply, None);
-                    }
-                }
-                Err(_) => {
-                    let msg = "Dạ, hiện tại dịch vụ Ollama LLM chưa được khởi chạy trên máy của bạn.";
-                    println!("⚠️ {}", msg);
-                    if args.voice && tts.is_available() {
-                        tts.speak(msg, None);
-                    }
-                }
-            }
+            execute_llm_query(
+                &q,
+                args.model.as_deref(),
+                &model_router,
+                &ollama,
+                &config,
+                &tts,
+                args.voice,
+            )
+            .await;
         }
         return Ok(());
     }
@@ -214,35 +199,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         tts.speak(&reply, None);
                                     }
                                 } else {
-                                    println!("🌐 [Deep-Path LLM]: Đang suy luận qua Ollama...");
-                                    let messages = vec![
-                                        voice_ai::ai::ChatMessage {
-                                            role: "system".to_string(),
-                                            content: voice_ai::ai::ollama::SYSTEM_PROMPT.to_string(),
-                                        },
-                                        voice_ai::ai::ChatMessage {
-                                            role: "user".to_string(),
-                                            content: trimmed.to_string(),
-                                        },
-                                    ];
-                                    match ollama.chat(messages, |chunk| {
-                                        print!("{}", chunk);
-                                        let _ = io::stdout().flush();
-                                    }).await {
-                                        Ok(llm_reply) => {
-                                            println!();
-                                            if tts.is_available() {
-                                                tts.speak(&llm_reply, None);
-                                            }
-                                        }
-                                        Err(_) => {
-                                            let msg = "Dạ, hiện tại tôi chưa kết nối được với mô hình Ollama.";
-                                            println!("⚠️ {}", msg);
-                                            if tts.is_available() {
-                                                tts.speak(msg, None);
-                                            }
-                                        }
-                                    }
+                                    execute_llm_query(
+                                        trimmed,
+                                        args.model.as_deref(),
+                                        &model_router,
+                                        &ollama,
+                                        &config,
+                                        &tts,
+                                        true,
+                                    )
+                                    .await;
                                 }
                             }
                             Err(e) => eprintln!("Lỗi STT: {}", e),
@@ -290,7 +256,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     tts.speak(&reply, None);
                 }
             } else {
-                println!("🌐 [Deep-Path]: Đang chuyển sang Ollama LLM ({:.2} µs)...", elapsed.as_secs_f64() * 1_000_000.0);
+                execute_llm_query(
+                    trimmed,
+                    args.model.as_deref(),
+                    &model_router,
+                    &ollama,
+                    &config,
+                    &tts,
+                    args.voice,
+                )
+                .await;
             }
         }
         return Ok(());
@@ -337,6 +312,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if tts.is_available() {
                         tts.speak(&rep, Some(&state_manager));
                     }
+                } else {
+                    execute_llm_query(
+                        &text,
+                        None,
+                        &model_router,
+                        &ollama,
+                        &config,
+                        &tts,
+                        true,
+                    )
+                    .await;
                 }
                 state_manager.set_state(AssistantState::Idle, None).await;
             }
@@ -344,6 +330,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+async fn execute_llm_query(
+    prompt: &str,
+    model_override: Option<&str>,
+    router: &voice_ai::ai::ModelRouter,
+    ollama: &voice_ai::ai::OllamaClient,
+    config: &Config,
+    tts: &PiperTts,
+    speak: bool,
+) {
+    let (target_model, role, options) = if let Some(m) = model_override {
+        (
+            m.to_string(),
+            voice_ai::ai::TaskRole::General,
+            voice_ai::ai::ChatOptions::default(),
+        )
+    } else {
+        router.route_prompt(prompt, &config.model).await
+    };
+
+    println!(
+        "🌐 [Deep-Path LLM]: Điều hướng tự động -> model '{}' [{}]",
+        target_model,
+        role.label()
+    );
+
+    let messages = vec![
+        voice_ai::ai::ChatMessage {
+            role: "system".to_string(),
+            content: voice_ai::ai::ollama::SYSTEM_PROMPT.to_string(),
+        },
+        voice_ai::ai::ChatMessage {
+            role: "user".to_string(),
+            content: prompt.to_string(),
+        },
+    ];
+
+    match ollama
+        .chat_with_options(Some(&target_model), messages, Some(options), |chunk| {
+            print!("{}", chunk);
+            let _ = io::stdout().flush();
+        })
+        .await
+    {
+        Ok(raw_reply) => {
+            println!();
+            let (_thought, clean_reply) = voice_ai::ai::filter_thinking_content(&raw_reply);
+            if speak && tts.is_available() {
+                tts.speak(&clean_reply, None);
+            }
+        }
+        Err(e) => {
+            let msg = format!(
+                "Dạ, hiện tại dịch vụ Ollama chưa thể xử lý mô hình '{}': {}",
+                target_model, e
+            );
+            println!("⚠️ {}", msg);
+            if speak && tts.is_available() {
+                tts.speak("Dạ, hiện tại dịch vụ trí tuệ nhân tạo chưa sẵn sàng.", None);
+            }
+        }
+    }
 }
 
 fn run_nlu_benchmark(iterations: usize) {

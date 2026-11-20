@@ -5,6 +5,10 @@ static CJK_EMOJI_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[\u4e00-\u9fff\u3000-\u303f\uff00-\uffef\x{10000}-\x{10ffff}]").unwrap()
 });
 
+static THINK_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)<think>.*?</think>").unwrap()
+});
+
 static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://\S+").unwrap()
 });
@@ -74,6 +78,9 @@ pub fn sanitize_text_for_voice(text: &str) -> String {
 
     let mut t = text.to_string();
 
+    // Loại bỏ thẻ suy nghĩ <think>...</think> của các mô hình reasoning
+    t = THINK_TAG_RE.replace_all(&t, "").to_string();
+
     // Chuẩn hóa 'Dà' -> 'Dạ'
     t = Regex::new(r"\b[Dd]à\b").unwrap().replace_all(&t, "Dạ").to_string();
 
@@ -120,5 +127,12 @@ mod tests {
             out,
             "Pin hiện tại còn 85 phần trăm và RAM trống 4 phẩy 2 ghi ga lúc 14 giờ 30 phút, nhiệt độ 28 độ C."
         );
+    }
+
+    #[test]
+    fn test_sanitize_strips_think_tags() {
+        let input = "<think>\nĐang suy luận logic...\n</think>\nChào bạn, tôi có thể giúp gì?";
+        let out = sanitize_text_for_voice(input);
+        assert_eq!(out, "Chào bạn, tôi có thể giúp gì?");
     }
 }
