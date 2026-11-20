@@ -7,6 +7,12 @@ Dự án trợ lý ảo AI cục bộ siêu tốc độ cao (sub-microsecond Fas
   - Tốc độ xử lý: **~18,000 queries/giây**.
   - Độ trễ trung vị (Median latency): **~17 µs** (nhanh hơn Python x20 - x50 lần).
   - Tự động chuẩn hóa dấu tiếng Việt, sửa lỗi phiên âm Whisper và chống lộ dữ liệu nhạy cảm.
+- **Smart Multi-Model Auto-Discovery & Dynamic Router**:
+  - Tự động nhận diện toàn bộ mô hình AI có sẵn trong Ollama qua API `/api/tags` (cache 30s).
+  - Tự động phân tích ngữ nghĩa câu hỏi và điều hướng tới **mô hình tốt nhất** trên máy:
+    - ⚡ **Hội thoại nhanh / Xã giao (Fast)**: Điều hướng tới `qwen3.8:2b` (hoặc các model 2B-4B) để phản hồi siêu tốc.
+    - 💻 **Lập trình & Kỹ thuật (Coder)**: Điều hướng tới `qwen2.5:latest` (Qwen2.5-Coder-7B).
+    - 🧠 **Suy luận sâu / Toán / Logic (Reasoning)**: Điều hướng tới `qwen3:4b-thinking` (kèm bộ lọc bóc tách suy nghĩ nội tâm `<think>` để giọng nói TTS tự nhiên).
 - **Audio & Speech Pipeline**:
   - **VAD (Voice Activity Detection)**: Schmitt-trigger lọc nhiễu âm bản địa.
   - **Capture**: PipeWire native recording (`pw-record`) với 600ms pre-roll circular buffer và AGC.
