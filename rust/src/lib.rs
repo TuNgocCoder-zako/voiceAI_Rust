@@ -6,7 +6,7 @@ pub mod ai;
 pub mod speech;
 pub mod audio;
 
-pub use audio::{AudioRecorder, WhisperEngine};
+pub use audio::{detect_wake_word, AudioRecorder, WakeWordType, WhisperEngine};
 pub use config::Config;
 pub use core::nlu::{clean_user_input, fast_path_nlu, strip_vietnamese_accents};
 pub use core::state::{AssistantState, StateManager};

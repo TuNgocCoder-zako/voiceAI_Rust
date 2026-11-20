@@ -1,15 +1,17 @@
 use clap::Parser;
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
+use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use voice_ai::audio::{AudioRecorder, WhisperEngine};
+use voice_ai::audio::{detect_wake_word, AudioRecorder, WhisperEngine};
 use voice_ai::config::Config;
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::core::state::{AssistantState, StateManager};
 use voice_ai::ipc::client::send_ipc_command;
 use voice_ai::ipc::server::{ActionRequest, IpcServer};
 use voice_ai::speech::{play_chime, ChimeType, PiperTts};
-use voice_ai::tools::apps::build_app_index;
+use voice_ai::tools::apps::{build_app_index, DesktopApp};
 
 #[derive(Parser, Debug)]
 #[command(name = "ai-assistant")]
@@ -23,8 +25,11 @@ struct Args {
     #[arg(short, long, help = "Bật giọng nói phản hồi (Piper TTS offline)")]
     voice: bool,
 
-    #[arg(short = 'l', long, help = "Chế độ nghe qua Microphone thời gian thực (Voice Chat)")]
+    #[arg(short = 'l', long, help = "Chế độ nghe qua Microphone liên tục (Always-on VAD Chat)")]
     listen: bool,
+
+    #[arg(short = 'w', long, help = "Chế độ đánh thức bằng từ khóa Wake Word rảnh tay ('Alexa', 'Trợ lý ơi')")]
+    wake_word: bool,
 
     #[arg(short = 'm', long, help = "Chỉ định thủ công mô hình LLM (Bỏ qua tự động định tuyến)")]
     model: Option<String>,
@@ -124,12 +129,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let app_index = build_app_index();
-    let tts = PiperTts::new();
-    let recorder = AudioRecorder::new();
-    let whisper = WhisperEngine::new();
-    let ollama = voice_ai::ai::OllamaClient::new(&config.ollama_url, &config.model);
-    let model_router = voice_ai::ai::ModelRouter::new(&config.ollama_url);
+    let app_index = Arc::new(build_app_index());
+    let tts = Arc::new(PiperTts::new());
+    let recorder = Arc::new(AudioRecorder::new());
+    let whisper = Arc::new(WhisperEngine::new());
+    let ollama = Arc::new(voice_ai::ai::OllamaClient::new(&config.ollama_url, &config.model));
+    let model_router = Arc::new(voice_ai::ai::ModelRouter::new(&config.ollama_url));
 
     // 3. Single Query Execution
     if let Some(q) = args.query {
@@ -154,9 +159,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 4. Voice Listening Mode (Microphone Voice Loop)
+    // 4. Dedicated Hands-Free Wake Word Mode
+    if args.wake_word {
+        run_wake_word_loop(
+            recorder.clone(),
+            whisper.clone(),
+            app_index.clone(),
+            model_router.clone(),
+            ollama.clone(),
+            config.clone(),
+            tts.clone(),
+            args.model.clone(),
+        )
+        .await;
+        return Ok(());
+    }
+
+    // 5. Always-on Voice Listening Mode (Microphone Voice Loop without wake word)
     if args.listen {
-        println!("🎙️ Chế độ đàm thoại giọng nói (Voice Chat) - Nói 'tạm biệt' hoặc Ctrl+C để thoát.");
+        println!("🎙️ Chế độ đàm thoại giọng nói liên tục (Always-on VAD) - Nói 'tạm biệt' hoặc Ctrl+C để thoát.");
         println!("🔔 Đang sẵn sàng... Hãy nói vào microphone!");
 
         loop {
@@ -189,27 +210,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     break;
                                 }
 
-                                let start_nlu = Instant::now();
-                                let (handled, reply) = fast_path_nlu(trimmed, &app_index, false);
-                                let nlu_time = start_nlu.elapsed();
-
-                                if handled {
-                                    println!("🤖 Trợ lý ({:.2} µs): {}", nlu_time.as_secs_f64() * 1_000_000.0, reply);
-                                    if tts.is_available() {
-                                        tts.speak(&reply, None);
-                                    }
-                                } else {
-                                    execute_llm_query(
-                                        trimmed,
-                                        args.model.as_deref(),
-                                        &model_router,
-                                        &ollama,
-                                        &config,
-                                        &tts,
-                                        true,
-                                    )
-                                    .await;
-                                }
+                                execute_voice_command(
+                                    trimmed,
+                                    &app_index,
+                                    args.model.as_deref(),
+                                    &model_router,
+                                    &ollama,
+                                    &config,
+                                    &tts,
+                                )
+                                .await;
                             }
                             Err(e) => eprintln!("Lỗi STT: {}", e),
                         }
@@ -224,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 5. Interactive CLI / Push-to-Talk Mode
+    // 6. Interactive CLI / Push-to-Talk Mode
     if args.push_to_talk {
         println!("🎙️ Chế độ tương tác dòng lệnh (Push-to-Talk) - Nhập 'exit' để thoát.");
         let stdin = io::stdin();
@@ -271,8 +281,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 6. Default: Run Daemon & IPC Server
+    // 7. Default: Run Daemon & IPC Server with Integrated Hands-Free Wake Word!
     println!("🌟 Khởi chạy Voice AI Assistant Daemon (Rust Core v2.5.0)...");
+    println!("🎧 Đang túc trực lắng nghe từ khóa: 'Alexa', 'Trợ lý ơi', 'Hey Jarvis'...");
     let state_manager = StateManager::new();
     let (action_tx, mut action_rx) = mpsc::channel::<ActionRequest>(64);
 
@@ -284,7 +295,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    println!("⚡ Trợ lý đã sẵn sàng nhận lệnh qua IPC Unix Domain Socket.");
+    // Spawn Background Wake Word Listener Task
+    let ww_recorder = recorder.clone();
+    let ww_whisper = whisper.clone();
+    let ww_app_index = app_index.clone();
+    let ww_router = model_router.clone();
+    let ww_ollama = ollama.clone();
+    let ww_config = config.clone();
+    let ww_tts = tts.clone();
+
+    tokio::spawn(async move {
+        run_wake_word_loop(
+            ww_recorder,
+            ww_whisper,
+            ww_app_index,
+            ww_router,
+            ww_ollama,
+            ww_config,
+            ww_tts,
+            None,
+        )
+        .await;
+    });
+
+    println!("⚡ Trợ lý đã sẵn sàng nhận lệnh qua Giọng nói (Wake Word) hoặc IPC Socket.");
     state_manager.set_state(AssistantState::Idle, None).await;
 
     while let Some(action) = action_rx.recv().await {
@@ -330,6 +364,131 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Vòng lặp lắng nghe từ khóa Wake Word rảnh tay
+async fn run_wake_word_loop(
+    recorder: Arc<AudioRecorder>,
+    whisper: Arc<WhisperEngine>,
+    app_index: Arc<HashMap<String, DesktopApp>>,
+    model_router: Arc<voice_ai::ai::ModelRouter>,
+    ollama: Arc<voice_ai::ai::OllamaClient>,
+    config: Config,
+    tts: Arc<PiperTts>,
+    model_override: Option<String>,
+) {
+    println!("🎧 [Hands-Free Wake Word]: Đang túc trực... Hãy nói 'Alexa', 'Trợ lý ơi' hoặc 'Hey Jarvis'.");
+
+    loop {
+        // Thu âm các đoạn âm thanh ngắn (tối đa 4 giây)
+        let record_res = recorder.record(4.0, None).map_err(|e| e.to_string());
+        match record_res {
+            Ok(samples) => {
+                if samples.len() < 3200 { // Dưới 200ms bỏ qua
+                    continue;
+                }
+
+                let temp_wav = "/tmp/wake_input.wav";
+                if AudioRecorder::save_wav(&samples, temp_wav, 16000).is_ok() {
+                    let transcript_res = whisper.transcribe_wav(temp_wav).map_err(|e| e.to_string());
+                    if let Ok(transcript) = transcript_res {
+                        let trimmed = transcript.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+
+                        // Kiểm tra từ khóa Wake Word
+                        if let Some((wake_word, cmd)) = detect_wake_word(trimmed) {
+                            play_chime(ChimeType::Wake);
+
+                            if cmd.is_empty() {
+                                // Người dùng chỉ mới gọi tên: "Alexa" -> Đợi câu lệnh tiếp theo
+                                println!("\n🔔 [Wake Word: {}] Đang lắng nghe câu lệnh tiếp theo...", wake_word.name());
+                                let followup_res = recorder.record(8.0, None).map_err(|e| e.to_string());
+                                match followup_res {
+                                    Ok(followup_samples) => {
+                                        if followup_samples.len() < 3200 {
+                                            continue;
+                                        }
+                                        let followup_wav = "/tmp/voice_input.wav";
+                                        if AudioRecorder::save_wav(&followup_samples, followup_wav, 16000).is_ok() {
+                                            let followup_res = whisper.transcribe_wav(followup_wav).map_err(|e| e.to_string());
+                                            if let Ok(followup_text) = followup_res {
+                                                let q = followup_text.trim();
+                                                if !q.is_empty() {
+                                                    println!("👤 Bạn: \"{}\"", q);
+                                                    execute_voice_command(
+                                                        q,
+                                                        &app_index,
+                                                        model_override.as_deref(),
+                                                        &model_router,
+                                                        &ollama,
+                                                        &config,
+                                                        &tts,
+                                                    )
+                                                    .await;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Err(err) => eprintln!("Lỗi thu âm tiếp nối: {}", err),
+                                }
+                            } else {
+                                // Người dùng nói cả từ khóa lẫn câu lệnh trong 1 hơi: "Alexa, mấy giờ rồi"
+                                println!("\n🔔 [Wake Word: {}] Câu lệnh tức thì: \"{}\"", wake_word.name(), cmd);
+                                execute_voice_command(
+                                    &cmd,
+                                    &app_index,
+                                    model_override.as_deref(),
+                                    &model_router,
+                                    &ollama,
+                                    &config,
+                                    &tts,
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+            }
+            Err(err) => {
+                eprintln!("Lỗi ghi âm wake word: {}", err);
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            }
+        }
+    }
+}
+
+async fn execute_voice_command(
+    query: &str,
+    app_index: &HashMap<String, DesktopApp>,
+    model_override: Option<&str>,
+    model_router: &voice_ai::ai::ModelRouter,
+    ollama: &voice_ai::ai::OllamaClient,
+    config: &Config,
+    tts: &PiperTts,
+) {
+    let start_nlu = Instant::now();
+    let (handled, reply) = fast_path_nlu(query, app_index, false);
+    let nlu_time = start_nlu.elapsed();
+
+    if handled {
+        println!("🤖 Trợ lý ({:.2} µs): {}", nlu_time.as_secs_f64() * 1_000_000.0, reply);
+        if tts.is_available() {
+            tts.speak(&reply, None);
+        }
+    } else {
+        execute_llm_query(
+            query,
+            model_override,
+            model_router,
+            ollama,
+            config,
+            tts,
+            true,
+        )
+        .await;
+    }
 }
 
 async fn execute_llm_query(
