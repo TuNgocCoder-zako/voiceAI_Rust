@@ -48,6 +48,15 @@ ai-assistant-rs --query "thời tiết hôm nay thế nào" --voice
 ai-assistant-rs --push-to-talk
 ```
 
+### Chạy chế độ Đánh thức bằng giọng nói rảnh tay (Hands-Free Wake Word)
+```bash
+# Lắng nghe liên tục từ khóa 'Alexa', 'Trợ lý ơi', 'Hey Jarvis' (chỉ tốn ~15MB RAM)
+ai-assistant-rs --wake-word
+
+# Hoặc khởi chạy Daemon nền (vừa nhận lệnh IPC vừa túc trực Wake Word):
+ai-assistant-rs
+```
+
 ### Chạy chế độ Lắng nghe liên tục (Always-on VAD)
 ```bash
 ai-assistant-rs --listen
