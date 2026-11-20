@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 pub const DEFAULT_SOCKET_PATH: &str = "/tmp/voice_ai_state.sock";
 pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
-pub const DEFAULT_MODEL: &str = "qwen2.5";
+pub const DEFAULT_MODEL: &str = "qwen3.8:2b";
 pub const SAMPLE_RATE: u32 = 16000;
 pub const CHUNK_SIZE: usize = 1280;
 
