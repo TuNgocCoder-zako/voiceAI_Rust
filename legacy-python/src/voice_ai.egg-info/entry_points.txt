@@ -1,3 +1,0 @@
-[console_scripts]
-ai-assistant = ai_assistant.app:main
-alexa-voice = ai_assistant.app:main

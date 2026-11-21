@@ -1,21 +1,6 @@
-# Python artifacts
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-
-# Virtual environments
-venv/
-env/
-ENV/
-*.venv/
-
-# Backup and temporary files
-*.bak
-*~
-*.swp
-*.swo
+# Rust build artifacts
+target/
+**/*.rs.bk
 
 # Large model weights / datasets / audio files
 models/
@@ -29,12 +14,12 @@ models/
 *.zip
 *.wav
 *.mp3
-training/**/dataset/
-training/**/datasets/
-dataset_wakeword.tar.gz
 
-# Graphify & Knowledge Graph
-graphify-out/
+# Backup & temporary files
+*.bak
+*~
+*.swp
+*.swo
 
 # Environment & sensitive configs
 .env
@@ -50,5 +35,3 @@ logs/
 *.log
 !logs/.gitkeep
 !logs/agent/.gitkeep
-target/
-legacy-python/**/dataset/
