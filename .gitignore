@@ -50,4 +50,5 @@ logs/
 *.log
 !logs/.gitkeep
 !logs/agent/.gitkeep
-rust/target/
+target/
+legacy-python/**/dataset/
