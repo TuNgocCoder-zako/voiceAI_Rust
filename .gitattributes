@@ -1,0 +1,2 @@
+# GitHub Linguist settings
+*.rs linguist-detectable=true
