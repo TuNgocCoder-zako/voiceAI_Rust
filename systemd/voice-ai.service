@@ -1,0 +1,19 @@
+[Unit]
+Description=Voice AI Assistant Daemon (Rust Native)
+Documentation=https://github.com/TuNgocCoder-zako/ai-assistant
+After=pipewire.service pipewire-pulse.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/ngoctu/Projects/rust/voice-ai
+ExecStart=/home/ngoctu/.local/bin/ai-assistant-rs
+Restart=always
+RestartSec=3
+Environment=PATH=/home/ngoctu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

@@ -74,7 +74,25 @@ ai-assistant-rs --benchmark
 
 ---
 
-## 3. Quản lý Ollama Docker Backend
+## 3. Dịch vụ Chạy Ngầm Tự Động (Systemd Background Service)
+
+Trợ lý đã được cấu hình chạy ngầm vĩnh viễn dưới dạng dịch vụ `systemd --user` (chỉ tiêu thụ **~9.6 MB RAM** và tự động khởi động cùng hệ điều hành):
+
+```bash
+# Xem trạng thái trợ lý đang chạy ngầm
+systemctl --user status voice-ai
+
+# Xem nhật ký logs thời gian thực
+journalctl --user -u voice-ai -f
+
+# Tạm dừng / Khởi động lại dịch vụ
+systemctl --user stop voice-ai
+systemctl --user restart voice-ai
+```
+
+---
+
+## 4. Quản lý Ollama Docker Backend
 
 Container Ollama đã được thiết lập với cờ auto-restart:
 ```bash
