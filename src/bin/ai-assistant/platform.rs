@@ -104,12 +104,11 @@ pub fn detect_internal_mic_card() -> String {
 
 pub fn ensure_mic_levels() {
     let card = detect_internal_mic_card();
+    // Bật phần cứng Internal Mic Boost trên ALSA nếu có
     let _ = Command::new("amixer")
         .args(["-c", &card, "sset", "Internal Mic Boost", "1"])
         .output();
-    let _ = Command::new("amixer")
-        .args(["-c", &card, "sset", "Capture", "85%"])
-        .output();
+
     // Đồng bộ mức âm lượng và bỏ mute cho PipeWire Source / EchoCancel
     let _ = Command::new("wpctl")
         .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", "1.0"])
