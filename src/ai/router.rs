@@ -228,6 +228,22 @@ impl ModelRouter {
         }
     }
 
+    /// Định tuyến từ câu hỏi, cho phép ép chế độ Suy luận sâu từ UI
+    pub async fn route_prompt_with_deep(
+        &self,
+        prompt: &str,
+        force_deep: bool,
+        default_fallback: &str,
+    ) -> (String, TaskRole, ChatOptions) {
+        let role = if force_deep {
+            TaskRole::Reasoning
+        } else {
+            self.detect_role(prompt)
+        };
+        let available = self.get_available_models().await;
+        self.resolve_best_model(role, &available, default_fallback)
+    }
+
     /// Định tuyến hoàn chỉnh từ câu hỏi người dùng
     pub async fn route_prompt(
         &self,
@@ -307,18 +323,24 @@ impl ModelRouter {
     }
 }
 
-/// Trích xuất suy nghĩ nội tâm <think>...</think> nếu có từ các mô hình reasoning
+/// Trích xuất suy nghĩ nội tâm <think>...</think> (an toàn cả khi thẻ bị cắt chưa kịp đóng)
 pub fn filter_thinking_content(text: &str) -> (Option<String>, String) {
     if let Some(start) = text.find("<think>") {
-        if let Some(end) = text.find("</think>") {
-            let thought = text[start + 7..end].trim().to_string();
+        let after_open = start + "<think>".len();
+        if let Some(rel_end) = text[after_open..].find("</think>") {
+            let end = after_open + rel_end;
+            let thought = text[after_open..end].trim().to_string();
             let mut final_text = String::new();
             final_text.push_str(&text[..start]);
-            final_text.push_str(&text[end + 8..]);
+            final_text.push_str(&text[end + "</think>".len()..]);
             return (Some(thought), final_text.trim().to_string());
+        } else {
+            let thought = text[after_open..].trim().to_string();
+            let prefix = text[..start].trim().to_string();
+            return (Some(thought), prefix);
         }
     }
-    (None, text.to_string())
+    (None, text.trim().to_string())
 }
 
 #[cfg(test)]

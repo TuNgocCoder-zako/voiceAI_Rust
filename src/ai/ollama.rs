@@ -38,6 +38,7 @@ struct ChunkMessage {
     #[serde(default)]
     content: String,
     #[serde(default)]
+    #[allow(dead_code)]
     thinking: Option<String>,
 }
 
@@ -102,36 +103,66 @@ impl OllamaClient {
         };
 
         let response = self.client.post(&url).json(&payload).send().await?;
+        if !response.status().is_success() {
+            let status = response.status();
+            let err_body = response.text().await.unwrap_or_default();
+            return Err(format!("Ollama HTTP {}: {}", status, err_body.trim()).into());
+        }
+
         let mut stream = response.bytes_stream();
+        let mut byte_buf: Vec<u8> = Vec::new();
         let mut full_content = String::new();
-        let mut full_thinking = String::new();
+        let mut is_done = false;
 
         while let Some(chunk_res) = stream.next().await {
             let chunk = chunk_res?;
-            let text = String::from_utf8_lossy(&chunk);
-            for line in text.lines() {
-                if let Ok(data) = serde_json::from_str::<ChatChunk>(line) {
+            byte_buf.extend_from_slice(&chunk);
+
+            // Chỉ parse khi đã gom đủ trọn vẹn 1 dòng kết thúc bằng '\n'
+            while let Some(newline_pos) = byte_buf.iter().position(|&b| b == b'\n') {
+                let line_bytes: Vec<u8> = byte_buf.drain(..=newline_pos).collect();
+                let line = String::from_utf8_lossy(&line_bytes);
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                if let Ok(data) = serde_json::from_str::<ChatChunk>(trimmed) {
                     if let Some(msg) = data.message {
-                        if let Some(th) = msg.thinking {
-                            if !th.is_empty() {
-                                full_thinking.push_str(&th);
-                            }
-                        }
                         if !msg.content.is_empty() {
                             chunk_callback(&msg.content);
                             full_content.push_str(&msg.content);
                         }
                     }
                     if data.done == Some(true) {
+                        is_done = true;
                         break;
+                    }
+                }
+            }
+
+            if is_done {
+                break;
+            }
+        }
+
+        // Xử lý dòng cuối nếu server đóng kết nối không kèm '\n'
+        if !is_done && !byte_buf.is_empty() {
+            let line = String::from_utf8_lossy(&byte_buf);
+            if let Ok(data) = serde_json::from_str::<ChatChunk>(line.trim()) {
+                if let Some(msg) = data.message {
+                    if !msg.content.is_empty() {
+                        chunk_callback(&msg.content);
+                        full_content.push_str(&msg.content);
                     }
                 }
             }
         }
 
-        if full_content.trim().is_empty() && !full_thinking.trim().is_empty() {
-            chunk_callback(&full_thinking);
-            return Ok(full_thinking);
+        if full_content.trim().is_empty() {
+            let fallback = "Dạ, tôi chưa tổng hợp kịp câu trả lời. Bạn hỏi lại ngắn gọn hơn giúp tôi nhé.";
+            chunk_callback(fallback);
+            return Ok(fallback.to_string());
         }
 
         Ok(full_content)

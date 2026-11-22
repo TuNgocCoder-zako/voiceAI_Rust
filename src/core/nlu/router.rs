@@ -12,9 +12,13 @@ use regex::Regex;
 use std::sync::LazyLock;
 use unicode_normalization::UnicodeNormalization;
 
-static TIMER_MANAGER: LazyLock<TimerManager> = LazyLock::new(TimerManager::new);
+pub static TIMER_MANAGER: LazyLock<TimerManager> = LazyLock::new(TimerManager::new);
 static MEMORY_MANAGER: LazyLock<MemoryManager> = LazyLock::new(MemoryManager::new);
 static GLOBAL_CONFIG: LazyLock<Config> = LazyLock::new(Config::default);
+
+static SIMPLE_MATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^(?:tính|bao nhiêu là)?\s*(\d+(?:\.\d+)?)\s*([\+\-\*\/x×÷]|cộng|trừ|nhân|chia)\s*(\d+(?:\.\d+)?)\s*(?:bằng bao nhiêu|\?)?$").unwrap()
+});
 
 pub fn fast_path_nlu(
     user_text: &str,
@@ -374,13 +378,11 @@ fn fast_path_nlu_internal(
         if dry_run {
             return (true, "Thời tiết hiện tại 28 độ C, trời quang mây tạnh.".to_string());
         }
-        let loc = if let Some(idx) = t.find("ở ") {
-            t[idx + 3..].trim()
-        } else if let Some(idx) = t.find("tại ") {
-            t[idx + 5..].trim()
-        } else {
-            ""
-        };
+        let loc = t
+            .split_once("ở ")
+            .or_else(|| t.split_once("tại "))
+            .map(|(_, rest)| rest.trim())
+            .unwrap_or("");
         return (true, get_weather_info(loc));
     }
 
@@ -466,9 +468,28 @@ fn fast_path_nlu_internal(
     }
     if let Some(caps) = ALARM_ADD_RE.captures(&t) {
         if let Some(h) = caps.get(1) {
-            if let Ok(hr) = h.as_str().parse::<u32>() {
-                let mn = caps.get(2).and_then(|m| m.as_str().parse::<u32>().ok()).unwrap_or(0);
+            if let Ok(mut hr) = h.as_str().parse::<u32>() {
+                let mn = caps
+                    .get(2)
+                    .and_then(|m| m.as_str().parse::<u32>().ok())
+                    .unwrap_or(0);
+                if let Some(period) = caps.get(3).map(|m| m.as_str()) {
+                    match period {
+                        "chiều" | "tối" if hr < 12 => hr += 12,
+                        "sáng" if hr == 12 => hr = 0,
+                        _ => {}
+                    }
+                }
+                if hr > 23 || mn > 59 {
+                    return (
+                        true,
+                        "Giờ báo thức không hợp lệ, bạn nói lại giúp tôi nhé.".to_string(),
+                    );
+                }
                 let label = caps.get(4).map(|m| m.as_str()).unwrap_or("");
+                if dry_run {
+                    return (true, format!("Đã cài báo thức lúc {} giờ {} phút.", hr, mn));
+                }
                 return (true, TIMER_MANAGER.add_alarm(hr, mn, label));
             }
         }
@@ -495,13 +516,23 @@ fn fast_path_nlu_internal(
     if t.contains("đọc ghi chú") || t.contains("xem ghi chú") {
         return (true, MEMORY_MANAGER.read_notes());
     }
-    if let Some(idx) = t.find("ghi chú ") {
-        let note = t[idx + 8..].trim();
-        return (true, MEMORY_MANAGER.add_note(note));
+    if let Some((_, rest)) = t.split_once("ghi chú ") {
+        let note = rest.trim();
+        if !note.is_empty() {
+            if dry_run {
+                return (true, format!("Đã lưu ghi chú '{}'.", note));
+            }
+            return (true, MEMORY_MANAGER.add_note(note));
+        }
     }
-    if let Some(idx) = t.find("hãy nhớ ") {
-        let fact = t[idx + 9..].trim();
-        return (true, MEMORY_MANAGER.add_fact(fact));
+    if let Some((_, rest)) = t.split_once("hãy nhớ ") {
+        let fact = rest.trim();
+        if !fact.is_empty() {
+            if dry_run {
+                return (true, format!("Tôi đã ghi nhớ '{}'.", fact));
+            }
+            return (true, MEMORY_MANAGER.add_fact(fact));
+        }
     }
 
     // 17.5. Fuzzy Homophone Fallback
@@ -538,8 +569,7 @@ fn fast_path_nlu_internal(
 
 fn parse_simple_math(text: &str) -> Option<String> {
     let t = text.trim();
-    let re = Regex::new(r"^(?:tính|bao nhiêu là)?\s*(\d+(?:\.\d+)?)\s*([\+\-\*\/x×÷]|cộng|trừ|nhân|chia)\s*(\d+(?:\.\d+)?)\s*(?:bằng bao nhiêu|\?)?$").ok()?;
-    let caps = re.captures(t)?;
+    let caps = SIMPLE_MATH_RE.captures(t)?;
     let a: f64 = caps.get(1)?.as_str().parse().ok()?;
     let op = caps.get(2)?.as_str();
     let b: f64 = caps.get(3)?.as_str().parse().ok()?;
@@ -557,12 +587,32 @@ fn parse_simple_math(text: &str) -> Option<String> {
         _ => return None,
     };
 
-    Some(format!("Kết quả của phép tính là {}.", res))
+    if (res - res.round()).abs() < 1e-9 {
+        Some(format!("Kết quả của phép tính là {}.", res.round() as i64))
+    } else {
+        Some(format!("Kết quả của phép tính là {:.2}.", res))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_utf8_slices_and_alarm_period() {
+        let app_index = build_app_index();
+        // Các câu này từng gây panic vì cắt sai byte UTF-8
+        let (ok1, _) = fast_path_nlu("thời tiết ở đà lạt", &app_index, true);
+        let (ok2, _) = fast_path_nlu("thời tiết tại nha trang", &app_index, true);
+        let (ok3, r3) = fast_path_nlu("ghi chú mua sữa tươi", &app_index, true);
+        let (ok4, r4) = fast_path_nlu("hãy nhớ sinh nhật mẹ", &app_index, true);
+        let (ok5, r5) = fast_path_nlu("đặt báo thức 7 giờ tối", &app_index, true);
+
+        assert!(ok1 && ok2 && ok3 && ok4 && ok5);
+        assert!(r3.contains("mua sữa tươi"));
+        assert!(r4.contains("sinh nhật mẹ"));
+        assert!(r5.contains("19 giờ 0 phút"), "Got: {}", r5);
+    }
 
     #[test]
     fn test_all_benchmark_commands() {

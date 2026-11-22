@@ -153,7 +153,11 @@ impl AudioRecorder {
             full_samples.extend(chunk);
         }
 
-        let max_abs = full_samples.iter().map(|&s| s.abs()).max().unwrap_or(0);
+        let max_abs = full_samples
+            .iter()
+            .map(|&s| (s as i32).abs())
+            .max()
+            .unwrap_or(0);
         if max_abs < 250 {
             // Âm lượng quá nhỏ dưới ngưỡng nghe được, bỏ qua
             return Ok(Vec::new());
@@ -213,7 +217,11 @@ fn normalize_audio(samples: &mut [i16], ambient_noise: f32) {
     if samples.is_empty() {
         return;
     }
-    let max_abs = samples.iter().map(|&s| s.abs()).max().unwrap_or(0);
+    let max_abs = samples
+        .iter()
+        .map(|&s| (s as i32).abs())
+        .max()
+        .unwrap_or(0);
     if max_abs > 150 {
         let max_val_f = max_abs as f32 / 32768.0;
         let target_peak = 0.90f32;

@@ -9,6 +9,14 @@ static THINK_TAG_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?s)<think>.*?</think>").unwrap()
 });
 
+static UNCLOSED_THINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?s)<think>.*$").unwrap()
+});
+
+static DA_TYPO_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b[Dd]à\b").unwrap()
+});
+
 static URL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"https?://\S+").unwrap()
 });
@@ -78,11 +86,12 @@ pub fn sanitize_text_for_voice(text: &str) -> String {
 
     let mut t = text.to_string();
 
-    // Loại bỏ thẻ suy nghĩ <think>...</think> của các mô hình reasoning
+    // Loại bỏ thẻ suy nghĩ <think>...</think> (kể cả khi bị cắt cụt chưa kịp đóng)
     t = THINK_TAG_RE.replace_all(&t, "").to_string();
+    t = UNCLOSED_THINK_RE.replace_all(&t, "").to_string();
 
     // Chuẩn hóa 'Dà' -> 'Dạ'
-    t = Regex::new(r"\b[Dd]à\b").unwrap().replace_all(&t, "Dạ").to_string();
+    t = DA_TYPO_RE.replace_all(&t, "Dạ").to_string();
 
     // Xóa CJK và emoji
     t = CJK_EMOJI_RE.replace_all(&t, "").to_string();
