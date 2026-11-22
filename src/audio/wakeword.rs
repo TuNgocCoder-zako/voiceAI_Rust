@@ -23,7 +23,7 @@ impl WakeWordType {
 // Bao quát toàn diện các biến thể ngữ âm học mà Whisper thường nhận diện khi người Việt gọi:
 // Alexa, Alex, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, Được xe, Tuyệt sợi...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|duoc\s*xe|dua\s*xe|tuyet\s*(?:soi|so|sa|xoi|xa)|tiet\s*(?:soi|so|sa|xoi|xa)|anh\s*thit\s*(?:sach|say)))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -31,7 +31,7 @@ static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro|cho)\s*(?:ly|lay)(?:\s*(?:oi|o|a|e|ha|nhe|nao))?|(?:em|ban|chi)\s*oi)\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro|cho)\s*(?:ly|lay)\s*(?:oi|o|a|e|ha|nhe|nao)|(?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)(?:tro\s*ly|cho\s*ly|cho\s*lay)|(?:em|ban|chi)\s*oi)\b").unwrap()
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -127,15 +127,45 @@ fn clean_remainder_by_unaccented(
         }
     }
 
-    clean
+    let mut clean = clean
         .trim_matches(|c: char| c.is_ascii_punctuation() || c == ' ' || c == '，' || c == '。')
         .trim()
-        .to_string()
+        .to_string();
+
+    // Loại bỏ lặp từ khóa đánh thức nếu người dùng gọi liên tiếp (ví dụ: "Alexa, Alexa", "Trợ lý ơi, Trợ lý ơ")
+    if !clean.is_empty() {
+        let unacc_clean = strip_vietnamese_accents(&clean).to_lowercase();
+        if UNACCENTED_ALEXA_RE.is_match(&unacc_clean)
+            || UNACCENTED_JARVIS_RE.is_match(&unacc_clean)
+            || UNACCENTED_ASSISTANT_RE.is_match(&unacc_clean)
+        {
+            if let Some((_, sub_cmd)) = detect_wake_word(&clean) {
+                clean = sub_cmd;
+            }
+        }
+    }
+
+    clean
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_detect_repeated_wake_word() {
+        let (w1, c1) = detect_wake_word("Trợ lý ơi, Trợ lý ơ").unwrap();
+        assert_eq!(w1, WakeWordType::Assistant);
+        assert_eq!(c1, "");
+
+        let (w2, c2) = detect_wake_word("Alexa, Alexa mấy giờ rồi").unwrap();
+        assert_eq!(w2, WakeWordType::Alexa);
+        assert_eq!(c2, "mấy giờ rồi");
+
+        let (w3, c3) = detect_wake_word("Alexa Alexa").unwrap();
+        assert_eq!(w3, WakeWordType::Alexa);
+        assert_eq!(c3, "");
+    }
 
     #[test]
     fn test_detect_alexa_standalone() {
@@ -177,7 +207,6 @@ mod tests {
             ("2 xa chạm pin còn bao nhiêu", "chạm pin còn bao nhiêu"),
             ("Ai xa mấy giờ rồi", "mấy giờ rồi"),
             ("A xa mở trình duyệt", "mở trình duyệt"),
-            ("Được xe bấy giờ là mấy giờ rồi", "bấy giờ là mấy giờ rồi"),
         ];
         for (input, expected_cmd) in cases {
             let r = detect_wake_word(input);
@@ -194,7 +223,6 @@ mod tests {
             ("Trợ lý ơi, kiểm tra pin", "kiểm tra pin"),
             ("Trợ lý ơ, mấy giờ rồi", "mấy giờ rồi"),
             ("Trợ lý à", ""),
-            ("Trợ lý", ""),
             ("chợ lấy ơi, mở visual studio code", "mở visual studio code"),
             ("Alo trợ lý", ""),
             ("Em ơi mấy giờ rồi", "mấy giờ rồi"),
@@ -222,5 +250,7 @@ mod tests {
         assert_eq!(detect_wake_word("Hôm nay trời đẹp quá bạn nhỉ"), None);
         assert_eq!(detect_wake_word("Tôi muốn đi uống cà phê"), None);
         assert_eq!(detect_wake_word("Tôi là trợ lý ảo của bạn"), None);
+        assert_eq!(detect_wake_word("giám đốc và trợ lý"), None);
+        assert_eq!(detect_wake_word("Đây là trợ lý"), None);
     }
 }

@@ -150,7 +150,7 @@ impl AudioRecorder {
         }
 
         let max_abs = full_samples.iter().map(|&s| s.abs()).max().unwrap_or(0);
-        if max_abs < 600 {
+        if max_abs < 900 {
             // Âm lượng quá nhỏ dưới ngưỡng nghe được, bỏ qua
             return Ok(Vec::new());
         }

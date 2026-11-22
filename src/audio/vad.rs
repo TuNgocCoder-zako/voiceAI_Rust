@@ -43,16 +43,16 @@ impl SchmittTriggerVad {
             return;
         }
         let avg_rms: f32 = ambient_rms_samples.iter().sum::<f32>() / ambient_rms_samples.len() as f32;
-        // Giới hạn độ ồn môi trường tối đa 0.040 để tiếng ồn nền/loa không làm điếc micro
-        self.ambient_noise = avg_rms.max(0.005).min(0.040);
-        self.speech_trigger_threshold = (self.ambient_noise * 1.4)
-            .max(self.ambient_noise + 0.010)
-            .max(0.022)
-            .min(0.055);
-        self.silence_threshold = (self.ambient_noise * 1.15)
-            .max(self.ambient_noise + 0.005)
-            .max(0.015)
-            .min(0.040);
+        // Giới hạn độ ồn môi trường tối đa 0.045 để tiếng ồn nền/loa không làm điếc micro
+        self.ambient_noise = avg_rms.max(0.005).min(0.045);
+        self.speech_trigger_threshold = (self.ambient_noise * 1.6)
+            .max(self.ambient_noise + 0.015)
+            .max(0.030)
+            .min(0.065);
+        self.silence_threshold = (self.ambient_noise * 1.2)
+            .max(self.ambient_noise + 0.006)
+            .max(0.016)
+            .min(0.045);
     }
 
     /// Tính toán RMS năng lượng của khung âm thanh i16 PCM (chuẩn hóa về [-1.0, 1.0])
