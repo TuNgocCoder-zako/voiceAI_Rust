@@ -4,6 +4,7 @@ target/
 
 # Large model weights / datasets / audio files
 models/
+faulty_audio_code/
 *.gguf
 *.bin
 *.pt
