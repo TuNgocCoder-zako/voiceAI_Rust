@@ -396,8 +396,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Some(text.clone()),
                         ).await;
 
-                        send_desktop_notification("🤖 Trợ lý AI", &rep);
-
                         if tts_clone.is_available() {
                             tts_clone.speak(&rep, Some(&state_mgr));
                         }
@@ -497,17 +495,6 @@ fn ensure_overlay_running() {
             }
         }
     }
-}
-
-fn send_desktop_notification(title: &str, body: &str) {
-    let t = title.to_string();
-    let b = body.to_string();
-    tokio::spawn(async move {
-        let _ = tokio::process::Command::new("notify-send")
-            .args(["-a", "Voice AI", "-u", "normal", "-i", "audio-speakers", &t, &b])
-            .status()
-            .await;
-    });
 }
 
 /// Vòng lặp lắng nghe từ khóa Wake Word rảnh tay
@@ -674,8 +661,6 @@ async fn execute_voice_command(
             ).await;
         }
 
-        send_desktop_notification("🤖 Trợ lý AI", &reply);
-
         if tts.is_available() {
             tts.speak(&reply, state_manager);
         }
@@ -753,8 +738,6 @@ async fn execute_llm_query(
                     Some(prompt.to_string()),
                 ).await;
             }
-
-            send_desktop_notification("🤖 Trợ lý AI", &clean_reply);
 
             if speak && tts.is_available() {
                 tts.speak(&clean_reply, state_manager);
