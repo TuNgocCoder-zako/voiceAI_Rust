@@ -1,16 +1,28 @@
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AssistantState {
-    Idle,
-    Listening,
-    Thinking,
-    Speaking,
-    Disabled,
+    Idle = 0,
+    Listening = 1,
+    Thinking = 2,
+    Speaking = 3,
+    Disabled = 4,
+}
+
+impl From<u8> for AssistantState {
+    fn from(v: u8) -> Self {
+        match v {
+            1 => AssistantState::Listening,
+            2 => AssistantState::Thinking,
+            3 => AssistantState::Speaking,
+            4 => AssistantState::Disabled,
+            _ => AssistantState::Idle,
+        }
+    }
 }
 
 impl std::fmt::Display for AssistantState {
@@ -65,7 +77,7 @@ fn write_ui_state_atomic(state: &AlexaUiState) {
 
 #[derive(Clone)]
 pub struct StateManager {
-    current_state: Arc<tokio::sync::RwLock<AssistantState>>,
+    current_state: Arc<AtomicU8>,
     broadcaster: broadcast::Sender<StateEvent>,
     is_interrupted: Arc<AtomicBool>,
 }
@@ -74,14 +86,18 @@ impl StateManager {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(128);
         Self {
-            current_state: Arc::new(tokio::sync::RwLock::new(AssistantState::Idle)),
+            current_state: Arc::new(AtomicU8::new(AssistantState::Idle as u8)),
             broadcaster: tx,
             is_interrupted: Arc::new(AtomicBool::new(false)),
         }
     }
 
+    pub fn get_state_sync(&self) -> AssistantState {
+        AssistantState::from(self.current_state.load(Ordering::SeqCst))
+    }
+
     pub async fn get_state(&self) -> AssistantState {
-        *self.current_state.read().await
+        self.get_state_sync()
     }
 
     pub async fn set_state_full(
@@ -90,10 +106,7 @@ impl StateManager {
         text: Option<String>,
         query: Option<String>,
     ) {
-        {
-            let mut state = self.current_state.write().await;
-            *state = new_state;
-        }
+        self.current_state.store(new_state as u8, Ordering::SeqCst);
 
         let now_sec = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)

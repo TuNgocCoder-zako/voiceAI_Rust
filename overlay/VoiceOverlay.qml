@@ -12,8 +12,10 @@ ShellRoot {
         return (xdg && xdg.length > 0) ? (xdg + "/alexa_state.json") : "/tmp/alexa_state.json";
     }
 
-    property string pythonBin: "/home/tu/Projects/python/voice-ai/venv/bin/python"
-    property string scriptPath: "/home/tu/Projects/python/voice-ai/assistant.py"
+    property string assistantBin: {
+        let home = Quickshell.env("HOME") || "/home/ngoctu";
+        return home + "/.local/bin/ai-assistant-rs";
+    }
 
     property string currentStatus: "idle"   // "idle", "listening", "thinking", "speaking"
     property string previousStatus: "idle"
@@ -238,12 +240,12 @@ ShellRoot {
     function toggleSpeakLongAnswer() {
         if (cmdRunner.running) cmdRunner.running = false;
         if (root.currentStatus === "speaking") {
-            cmdRunner.commandList = [root.pythonBin, root.scriptPath, "--stop"];
+            cmdRunner.commandList = [root.assistantBin, "--stop"];
             cmdRunner.running = true;
             showToast("🔇 Đã dừng đọc");
         } else {
             let toSpeak = root.longAnswerText.substring(0, 300);
-            cmdRunner.commandList = [root.pythonBin, root.scriptPath, "--text", toSpeak];
+            cmdRunner.commandList = [root.assistantBin, "--query", toSpeak];
             cmdRunner.running = true;
             showToast("🔊 Đang đọc phản hồi...");
         }
@@ -251,7 +253,7 @@ ShellRoot {
 
     function interruptAndListen() {
         if (cmdRunner.running) cmdRunner.running = false;
-        cmdRunner.commandList = [root.pythonBin, root.scriptPath, "--relisten"];
+        cmdRunner.commandList = [root.assistantBin, "--relisten"];
         cmdRunner.running = true;
         showToast("⏹ Đã dừng, đang lắng nghe câu tiếp theo...");
     }
@@ -268,10 +270,7 @@ ShellRoot {
         root.userIsTyping = false;
         root.isCardDismissed = false;
 
-        let args = [root.pythonBin, root.scriptPath, "--text", query];
-        if (deep) {
-            args.push("--deep");
-        }
+        let args = [root.assistantBin, "--query", query];
         if (cmdRunner.running) {
             cmdRunner.running = false;
         }
@@ -282,16 +281,15 @@ ShellRoot {
     function takeScreenshot() {
         showToast("📸 Đã chụp màn hình!");
         if (cmdRunner.running) cmdRunner.running = false;
-        cmdRunner.commandList = [root.pythonBin, "-c", "from ai_assistant.tools.vision import capture_screen; capture_screen()"];
+        cmdRunner.commandList = ["/usr/bin/grim"];
         cmdRunner.running = true;
     }
 
     PanelWindow {
         id: win
+        screen: Quickshell.screens[0]
         visible: root.isVisible || mainContent.opacity > 0.01
-        WlrLayershell.layer: WlrLayer.Overlay
-        WlrLayershell.exclusionMode: ExclusionMode.Ignore
-        WlrLayershell.keyboardFocus: root.isTextMode ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+        exclusionMode: ExclusionMode.Ignore
 
         anchors {
             bottom: true

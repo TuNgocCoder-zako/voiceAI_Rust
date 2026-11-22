@@ -332,21 +332,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ww_tts = tts.clone();
     let ww_state_mgr = state_manager.clone();
 
-    tokio::spawn(async move {
-        run_wake_word_loop(
-            ww_recorder,
-            ww_wake_whisper,
-            ww_query_whisper,
-            ww_app_index,
-            ww_router,
-            ww_ollama,
-            ww_config,
-            ww_tts,
-            ww_state_mgr,
-            None,
-        )
-        .await;
-    });
+    std::thread::Builder::new()
+        .name("wake-word-worker".to_string())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(run_wake_word_loop(
+                ww_recorder,
+                ww_wake_whisper,
+                ww_query_whisper,
+                ww_app_index,
+                ww_router,
+                ww_ollama,
+                ww_config,
+                ww_tts,
+                ww_state_mgr,
+                None,
+            ));
+        })
+        .expect("Failed to spawn wake-word-worker thread");
 
     println!("⚡ Trợ lý đã sẵn sàng nhận lệnh qua Giọng nói (Wake Word) hoặc IPC Socket.");
     state_manager.set_state(AssistantState::Idle, None).await;
@@ -360,43 +366,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             ActionRequest::Stop => {
                 println!("⏹️ Nhận sự kiện Stop: Đã dừng.");
+                state_manager.interrupt();
                 state_manager.set_state(AssistantState::Idle, None).await;
             }
             ActionRequest::Relisten => {
                 println!("🔄 Nhận sự kiện Relisten: Lắng nghe lượt mới...");
+                state_manager.interrupt();
+                state_manager.reset_interrupt();
                 state_manager.set_state(AssistantState::Listening, None).await;
                 play_chime(ChimeType::Wake);
             }
             ActionRequest::Query(text) => {
-                state_manager.set_state(AssistantState::Thinking, None).await;
-                let (handled, rep) = fast_path_nlu(&text, &app_index, false);
-                if handled {
-                    println!("🤖 [Fast-Path]: {}", rep);
-                    state_manager.set_state_full(
-                        AssistantState::Speaking,
-                        Some(rep.clone()),
-                        Some(text.clone()),
-                    ).await;
+                state_manager.reset_interrupt();
+                let state_mgr = state_manager.clone();
+                let app_idx = app_index.clone();
+                let tts_clone = tts.clone();
+                let router_clone = model_router.clone();
+                let ollama_clone = ollama.clone();
+                let cfg_clone = config.clone();
 
-                    send_desktop_notification("🤖 Trợ lý AI", &rep);
+                tokio::spawn(async move {
+                    state_mgr.set_state(AssistantState::Thinking, None).await;
+                    let (handled, rep) = fast_path_nlu(&text, &app_idx, false);
+                    if handled {
+                        println!("🤖 [Fast-Path]: {}", rep);
+                        state_mgr.set_state_full(
+                            AssistantState::Speaking,
+                            Some(rep.clone()),
+                            Some(text.clone()),
+                        ).await;
 
-                    if tts.is_available() {
-                        tts.speak(&rep, Some(&state_manager));
+                        send_desktop_notification("🤖 Trợ lý AI", &rep);
+
+                        if tts_clone.is_available() {
+                            tts_clone.speak(&rep, Some(&state_mgr));
+                        }
+                    } else {
+                        execute_llm_query(
+                            &text,
+                            None,
+                            &router_clone,
+                            &ollama_clone,
+                            &cfg_clone,
+                            &tts_clone,
+                            Some(&state_mgr),
+                            true,
+                        )
+                        .await;
                     }
-                } else {
-                    execute_llm_query(
-                        &text,
-                        None,
-                        &model_router,
-                        &ollama,
-                        &config,
-                        &tts,
-                        Some(&state_manager),
-                        true,
-                    )
-                    .await;
-                }
-                state_manager.set_state(AssistantState::Idle, None).await;
+                    state_mgr.set_state(AssistantState::Idle, None).await;
+                });
             }
         }
     }
@@ -405,34 +424,78 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn ensure_overlay_running() {
+    // 1. Kiểm tra xem giao diện QML Quickshell gốc (VoiceOverlay.qml) đã chạy chưa
+    let qml_check = std::process::Command::new("pgrep")
+        .args(["-f", "VoiceOverlay.qml"])
+        .output();
+    if let Ok(out) = qml_check {
+        if out.status.success() {
+            return;
+        }
+    }
+
+    let home = dirs::home_dir().unwrap_or_default();
+    let qml_candidates = [
+        home.join("Projects/rust/voice-ai/overlay/VoiceOverlay.qml"),
+        std::env::current_dir().unwrap_or_default().join("overlay/VoiceOverlay.qml"),
+        home.join(".config/voice-ai/overlay/VoiceOverlay.qml"),
+    ];
+
+    let qs_bin = if std::path::Path::new("/usr/bin/qs").exists() {
+        Some("/usr/bin/qs")
+    } else if std::path::Path::new("/usr/bin/quickshell").exists() {
+        Some("/usr/bin/quickshell")
+    } else {
+        None
+    };
+
+    if let (Some(qs), Some(qml_path)) = (qs_bin, qml_candidates.iter().find(|p| p.exists())) {
+        let mut cmd = std::process::Command::new(qs);
+        cmd.args(["-p", qml_path.to_str().unwrap_or_default()]);
+
+        // Trên Ubuntu GNOME Wayland, khởi chạy qua XCB (XWayland) để tạo cửa sổ ARGB 32-bit Dock luôn nổi
+        let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
+            .unwrap_or_default()
+            .to_lowercase()
+            .contains("gnome");
+        if is_gnome {
+            cmd.env("QT_QPA_PLATFORM", "xcb");
+        }
+        if std::env::var("DISPLAY").is_err() {
+            cmd.env("DISPLAY", ":0");
+        }
+
+        match cmd
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        {
+            Ok(_) => {
+                println!("🖥️ Đã khởi chạy giao diện Quickshell Dynamic Island Overlay: {:?}", qml_path);
+                return;
+            }
+            Err(e) => eprintln!("⚠️ Lỗi khởi chạy Quickshell overlay: {}", e),
+        }
+    }
+
+    // Dự phòng (fallback) nếu Quickshell chưa được cài
     let check = std::process::Command::new("pgrep")
         .args(["-x", "voice-overlay"])
         .output();
-    match check {
-        Ok(out) => {
-            if !out.status.success() {
-                let home = dirs::home_dir().unwrap_or_default();
-                let candidates = [
-                    home.join(".local/bin/voice-overlay"),
-                    std::env::current_dir().unwrap_or_default().join("target/release/voice-overlay"),
-                    home.join("Projects/rust/voice-ai/target/release/voice-overlay"),
-                    std::env::current_dir().unwrap_or_default().join("target/debug/voice-overlay"),
-                ];
-                if let Some(bin) = candidates.iter().find(|p| p.exists()) {
-                    match std::process::Command::new(bin)
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .spawn()
-                    {
-                        Ok(_) => println!("🖥️ Đã khởi chạy giao diện hiển thị Dynamic Island Overlay: {:?}", bin),
-                        Err(e) => eprintln!("⚠️ Lỗi khởi chạy overlay {:?}: {}", bin, e),
-                    }
-                } else {
-                    eprintln!("⚠️ Không tìm thấy file thực thi voice-overlay!");
-                }
+    if let Ok(out) = check {
+        if !out.status.success() {
+            let candidates = [
+                home.join(".local/bin/voice-overlay"),
+                std::env::current_dir().unwrap_or_default().join("target/release/voice-overlay"),
+                home.join("Projects/rust/voice-ai/target/release/voice-overlay"),
+            ];
+            if let Some(bin) = candidates.iter().find(|p| p.exists()) {
+                let _ = std::process::Command::new(bin)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn();
             }
         }
-        Err(e) => eprintln!("⚠️ Không thể thực thi pgrep: {}", e),
     }
 }
 
