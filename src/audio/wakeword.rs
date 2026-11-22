@@ -21,17 +21,17 @@ impl WakeWordType {
 
 // Regex trên chuỗi đã chuẩn hóa bỏ dấu tiếng Việt (lowercase)
 // Bao quát toàn diện các biến thể ngữ âm học mà Whisper thường nhận diện khi người Việt gọi:
-// Alexa, Alex, Alessia, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, A lê sạch, A lai xa...
+// Alexa, Alex, Alessia, A Lêsê, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, A lê sạch, A lai xa...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|alessia|alesia|aleccia|alesa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik|lai|lay)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*(?:le|lech|lec)\s*[-_]?\s*(?:xa|sa|ca|sach|say)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|alessia|alesia|aleccia|alesa|a\s*les\s*e|a\s*le\s*se|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik|lai|lay)(?:\s*[-_]?\s*(?:xa|sa|ca|se|ce|xe))?|(?:a|e)\s*[-_]?\s*(?:le|lech|lec)\s*[-_]?\s*(?:xa|sa|ca|sach|say|se|ce|xe)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa|se)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+|he\s+)?(?:jarvis|za\s*vit|gia\s*vit|da\s*vit|za-vit|gia-vit|da\s*ria|gia\s*ria|cha\s*vit|tra\s*vit|ha\s*vit))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+|he\s+|hai\s+|hi\s+)?(?:jarvis|za\s*vit|gia\s*vit|da\s*vit|za-vit|gia-vit|da\s*ria|gia\s*ria|cha\s*vit|tra\s*vit|ha\s*vit))\b").unwrap()
 });
 
 static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro|cho)\s*(?:ly|lay|li)(?:\s*(?:oi|o|a|e|ha|nhe|nao))?|(?:em|ban|chi)\s*oi)\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro|cho|co|do|chao)\s*(?:ly|lay|li|loi|le)(?:\s*(?:oi|o|a|e|ha|nhe|nao))?|troi\s*oi|(?:em|ban|chi)\s*oi)\b").unwrap()
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -229,6 +229,8 @@ mod tests {
             ("A lê sạch", ""),
             ("Alessia", ""),
             ("Alessia mấy giờ rồi", "mấy giờ rồi"),
+            ("A LÊSÊ!", ""),
+            ("A LÊSÊ mấy giờ rồi", "mấy giờ rồi"),
         ];
         for (input, expected_cmd) in cases {
             let r = detect_wake_word(input);
@@ -249,6 +251,13 @@ mod tests {
             ("Trợ lý à", ""),
             ("Trợ lý mấy giờ rồi", "mấy giờ rồi"),
             ("chợ lấy ơi, mở visual studio code", "mở visual studio code"),
+            ("Cỡ lý ơi!", ""),
+            ("Cơ lý", ""),
+            ("Cô lấy", ""),
+            ("Đó lý", ""),
+            ("trò lấy", ""),
+            ("Chào lời", ""),
+            ("Trời ơi!", ""),
             ("Alo trợ lý", ""),
             ("Em ơi mấy giờ rồi", "mấy giờ rồi"),
         ];
@@ -266,6 +275,7 @@ mod tests {
         let cases = [
             ("Hey Jarvis, mở visual studio code", "mở visual studio code"),
             ("Hey Jarvis", ""),
+            ("Hai Zavit", ""),
             ("Đà rìa mấy giờ rồi", "mấy giờ rồi"),
             ("Za vít", ""),
         ];

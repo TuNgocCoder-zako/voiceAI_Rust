@@ -388,6 +388,8 @@ fn fast_path_nlu_internal(
     for (site, link) in GLOBAL_CONFIG.url_shortcuts.iter() {
         let open_phrases = [
             format!("mở {}", site),
+            format!("mà {}", site),
+            format!("mờ {}", site),
             format!("bật {}", site),
             format!("vào {}", site),
             format!("truy cập {}", site),

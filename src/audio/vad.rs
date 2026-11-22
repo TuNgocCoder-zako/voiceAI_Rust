@@ -76,8 +76,8 @@ impl SchmittTriggerVad {
     pub fn new() -> Self {
         Self {
             ambient_noise: 0.008,
-            speech_trigger_threshold: 0.020,
-            silence_threshold: 0.012,
+            speech_trigger_threshold: 0.016,
+            silence_threshold: 0.010,
             has_spoken: false,
             silence_duration_ms: 0,
             spoken_duration_ms: 0,
@@ -90,25 +90,25 @@ impl SchmittTriggerVad {
             return;
         }
         let avg_rms: f32 = ambient_rms_samples.iter().sum::<f32>() / ambient_rms_samples.len() as f32;
-        self.ambient_noise = avg_rms.max(0.003).min(0.035);
-        self.speech_trigger_threshold = (self.ambient_noise * 2.0)
-            .max(self.ambient_noise + 0.012)
-            .clamp(0.018, 0.050);
-        self.silence_threshold = (self.ambient_noise * 1.3)
-            .max(self.ambient_noise + 0.005)
-            .clamp(0.010, 0.030);
+        self.ambient_noise = avg_rms.max(0.003).min(0.025);
+        self.speech_trigger_threshold = (self.ambient_noise * 1.5)
+            .max(self.ambient_noise + 0.007)
+            .clamp(0.014, 0.035);
+        self.silence_threshold = (self.ambient_noise * 1.15)
+            .max(self.ambient_noise + 0.003)
+            .clamp(0.008, 0.022);
     }
 
     /// Cập nhật thích nghi độ ồn nền trong lúc yên tĩnh
     pub fn update_ambient(&mut self, frame_rms: f32) {
         if !self.has_spoken && frame_rms < self.speech_trigger_threshold {
             self.ambient_noise = self.ambient_noise * 0.95 + frame_rms * 0.05;
-            self.speech_trigger_threshold = (self.ambient_noise * 2.0)
-                .max(self.ambient_noise + 0.012)
-                .clamp(0.018, 0.050);
-            self.silence_threshold = (self.ambient_noise * 1.3)
-                .max(self.ambient_noise + 0.005)
-                .clamp(0.010, 0.030);
+            self.speech_trigger_threshold = (self.ambient_noise * 1.5)
+                .max(self.ambient_noise + 0.007)
+                .clamp(0.014, 0.035);
+            self.silence_threshold = (self.ambient_noise * 1.15)
+                .max(self.ambient_noise + 0.003)
+                .clamp(0.008, 0.022);
         }
     }
 
@@ -144,8 +144,8 @@ impl SchmittTriggerVad {
             self.spoken_duration_ms += chunk_ms;
             if frame_rms <= self.silence_threshold {
                 self.silence_duration_ms += chunk_ms;
-                if self.silence_duration_ms >= 500 && self.spoken_duration_ms >= 180 {
-                    // Đã phát hiện khoảng lặng tự nhiên kết thúc câu nói (500ms)
+                if self.silence_duration_ms >= 550 && self.spoken_duration_ms >= 130 {
+                    // Đã phát hiện khoảng lặng tự nhiên kết thúc câu nói (550ms)
                     return (true, true);
                 }
             } else {

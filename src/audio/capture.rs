@@ -72,6 +72,12 @@ impl AudioRecorder {
         let mut stdout = child.stdout.take().ok_or("Failed to capture audio stdout")?;
         let mut buf = vec![0u8; chunk_bytes];
 
+        let initial_silence_timeout_ms: u32 = if max_duration_secs >= 4.0 {
+            4500 // 4.5 giây chờ người dùng bắt đầu nói câu lệnh sau tiếng Ting
+        } else {
+            2200 // 2.2 giây cho vòng lặp túc trực phát hiện Wake Word
+        };
+
         for i in 0..max_chunks {
             // Kiểm tra ngắt lời / dừng
             if let Some(mgr) = state_mgr {
@@ -114,8 +120,8 @@ impl AudioRecorder {
                     preroll_buffer.pop_front();
                 }
 
-                // Nếu người dùng chưa bắt đầu nói gì trong 2.0 giây thì dừng để vòng lặp túc trực xoay vòng
-                if i * 100 >= 2000 {
+                // Chờ người dùng bắt đầu nói (tối đa 4.5s cho câu lệnh, 2.2s cho wake word)
+                if (i * 100) as u32 >= initial_silence_timeout_ms {
                     break;
                 }
             } else {
@@ -136,8 +142,8 @@ impl AudioRecorder {
         let _ = child.kill();
         let _ = child.wait();
 
-        // Nếu người dùng nói dưới 180ms (chỉ là tiếng click chuột hoặc gõ phím)
-        if vad.spoken_duration_ms < 180 {
+        // Nếu người dùng nói dưới 130ms (chỉ là tiếng click chuột hoặc gõ phím)
+        if vad.spoken_duration_ms < 130 {
             return Ok(Vec::new());
         }
 
@@ -148,7 +154,7 @@ impl AudioRecorder {
         }
 
         let max_abs = full_samples.iter().map(|&s| s.abs()).max().unwrap_or(0);
-        if max_abs < 400 {
+        if max_abs < 250 {
             // Âm lượng quá nhỏ dưới ngưỡng nghe được, bỏ qua
             return Ok(Vec::new());
         }

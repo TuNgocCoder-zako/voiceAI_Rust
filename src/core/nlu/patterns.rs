@@ -141,7 +141,7 @@ pub static YT_SEARCH_RE2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?
 pub static GOOGLE_SEARCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?:tìm kiếm|tra cứu|tìm)\s+(.+?)(?:\s+(?:trên|ở|bằng)\s+(?:google|mạng|trình duyệt))?$").unwrap());
 
 // App / Web Launching
-pub static OPEN_TRIGGER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(mở|bật|chạy|khởi động|vào|nghe|lên|truy cập)\b").unwrap());
-pub static OPEN_APP_MATCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:mở|bật|chạy|khởi động|vào|nghe|lên|truy cập)\s+(?:ứng dụng\s+|phần mềm\s+|app\s+)?(.+)").unwrap());
+pub static OPEN_TRIGGER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(mở|mà|mờ|bật|chạy|khởi động|vào|nghe|lên|truy cập)\b").unwrap());
+pub static OPEN_APP_MATCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:mở|mà|mờ|bật|chạy|khởi động|vào|nghe|lên|truy cập)\s+(?:ứng dụng\s+|phần mềm\s+|app\s+)?(.+)").unwrap());
 pub static CLOSE_APP_MATCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:đóng|tắt|thoát|kill)\s+(?:ứng dụng\s+|phần mềm\s+|app\s+|trang web\s+|trang\s+|web\s+)?([a-zA-Z0-9\s_àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+)").unwrap());
 pub static MULTI_LAUNCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:,|\bvà\b|\bvới\b|\bvới\s+cả\b|\bcùng\s+với\b|\bcùng\b|\blẫn\b|\brồi\b|\bđồng\s+thời\b|\bvào\b)").unwrap());
