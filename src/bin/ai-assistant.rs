@@ -385,6 +385,12 @@ async fn run_wake_word_loop(
     println!("🎧 [Hands-Free Wake Word]: Đang túc trực... Hãy nói 'Alexa', 'Trợ lý ơi' hoặc 'Hey Jarvis'.");
 
     loop {
+        // Tạm dừng thu âm nếu TTS đang phát ra loa để chống tự kích hoạt (Acoustic Echo Loop)
+        if tts.is_speaking() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+            continue;
+        }
+
         // Thu âm các đoạn âm thanh ngắn (tối đa 3.5 giây)
         let record_res = recorder.record(3.5, None).map_err(|e| e.to_string());
         match record_res {
@@ -455,6 +461,9 @@ async fn run_wake_word_loop(
                                 )
                                 .await;
                             }
+
+                            // Nghỉ 800ms sau khi trả lời để âm thanh từ loa tiêu tán khỏi phòng, tránh mic bắt lại
+                            tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
                         }
                     }
                 }

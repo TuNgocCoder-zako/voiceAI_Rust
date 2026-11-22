@@ -30,11 +30,11 @@ static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro\s*ly\s*oi|oi\s*tro\s*ly|cho\s*ly\s*oi|cho\s*ly|tro\s*ly))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro\s*ly\s*oi|oi\s*tro\s*ly|cho\s*ly\s*oi)|(?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)(?:tro\s*ly|cho\s*ly))\b").unwrap()
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(ơi|này|hãy|cho\s*mình\s*hỏi|cho\s*tôi\s*hỏi|làm\s*ơn|giúp\s*mình|giúp\s*tôi)[,\s]+").unwrap()
+    Regex::new(r"(?i)^(ơi|à|a|này|hãy|cho\s*mình\s*hỏi|cho\s*tôi\s*hỏi|làm\s*ơn|giúp\s*mình|giúp\s*tôi)[,\s]+").unwrap()
 });
 
 /// Kiểm tra văn bản nhận diện từ microphone có chứa từ khóa đánh thức hay không.
@@ -63,6 +63,11 @@ pub fn detect_wake_word(text: &str) -> Option<(WakeWordType, String)> {
 
     // 3. Kiểm tra Trợ lý ơi
     if let Some(m) = UNACCENTED_ASSISTANT_RE.find(&unaccented) {
+        // Tránh tự kích hoạt lặp nếu câu chứa "trợ lý ảo" (TTS của bot tự xưng)
+        let unacc_rem = unaccented[m.end()..].trim_start();
+        if unacc_rem.starts_with("ao") {
+            return None;
+        }
         let remainder = clean_remainder_by_unaccented(raw, &unaccented, m.start(), m.end());
         return Some((WakeWordType::Assistant, remainder));
     }
@@ -161,6 +166,8 @@ mod tests {
         let cases = [
             ("A lếch", ""),
             ("A léc sa", ""),
+            ("Alex à mấy giờ rồi", "mấy giờ rồi"),
+            ("Alexa à mấy giờ rồi", "mấy giờ rồi"),
             ("Alex, mấy giờ rồi", "mấy giờ rồi"),
             ("A lếch, mở trình duyệt", "mở trình duyệt"),
             ("Aleksa ơi, pin còn bao nhiêu", "pin còn bao nhiêu"),
@@ -198,5 +205,6 @@ mod tests {
     fn test_non_wake_word_ignored() {
         assert_eq!(detect_wake_word("Hôm nay trời đẹp quá bạn nhỉ"), None);
         assert_eq!(detect_wake_word("Tôi muốn đi uống cà phê"), None);
+        assert_eq!(detect_wake_word("Tôi là trợ lý ảo của bạn"), None);
     }
 }

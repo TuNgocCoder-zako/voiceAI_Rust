@@ -49,6 +49,10 @@ impl PiperTts {
         self.piper_bin.exists() && self.model_path.exists()
     }
 
+    pub fn is_speaking(&self) -> bool {
+        self.is_speaking.load(Ordering::SeqCst)
+    }
+
     /// Đọc văn bản ra loa theo luồng streaming zero-copy (không ghi file tạm ra đĩa).
     /// Hỗ trợ ngắt lời tức thì (Barge-in) nếu StateManager kích hoạt interrupt.
     pub fn speak(&self, text: &str, state_mgr: Option<&StateManager>) -> bool {

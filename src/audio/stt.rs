@@ -100,8 +100,6 @@ impl WhisperEngine {
                 "-np",
                 "-t",
                 &self.threads.to_string(),
-                "--prompt",
-                "Alexa, Hey Jarvis, Trợ lý ơi",
             ])
             .output()?;
 
