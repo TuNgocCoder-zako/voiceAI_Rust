@@ -22,7 +22,7 @@ impl WakeWordType {
 // Regex trên chuỗi đã chuẩn hóa bỏ dấu tiếng Việt (lowercase)
 // Bao quát: Alexa, Alex, A lếch, A léc, A lek, A lếch xa, A lếch sa, A léc xa, A léc sa, Aleksa, Alecxia...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -34,7 +34,7 @@ static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)^(ơi|à|a|này|hãy|cho\s*mình\s*hỏi|cho\s*tôi\s*hỏi|làm\s*ơn|giúp\s*mình|giúp\s*tôi)[,\s]+").unwrap()
+    Regex::new(r"(?i)^(ơi|à|a|ấy|ay|này|hãy|cho\s*mình\s*hỏi|cho\s*tôi\s*hỏi|làm\s*ơn|giúp\s*mình|giúp\s*tôi)[,\s]+").unwrap()
 });
 
 /// Kiểm tra văn bản nhận diện từ microphone có chứa từ khóa đánh thức hay không.
