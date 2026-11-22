@@ -1,8 +1,9 @@
+use crate::tools::system::is_hyprland;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,10 +21,13 @@ pub fn build_app_index() -> AppIndex {
     let mut search_dirs = vec![
         PathBuf::from("/usr/share/applications"),
         PathBuf::from("/usr/local/share/applications"),
+        PathBuf::from("/var/lib/snapd/desktop/applications"),
+        PathBuf::from("/var/lib/flatpak/exports/share/applications"),
     ];
 
     if let Some(home) = dirs::home_dir() {
         search_dirs.push(home.join(".local/share/applications"));
+        search_dirs.push(home.join(".local/share/flatpak/exports/share/applications"));
     }
 
     for dir in search_dirs {
@@ -68,7 +72,8 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
                 match k {
                     "Name" if name.is_none() => name = Some(v.to_string()),
                     "Exec" if exec.is_none() => {
-                        let clean_exec = v.split_whitespace()
+                        let clean_exec = v
+                            .split_whitespace()
                             .filter(|arg| !arg.starts_with('%'))
                             .collect::<Vec<_>>()
                             .join(" ");
@@ -142,21 +147,46 @@ pub fn find_app_in_text<'a>(text: &str, index: &'a AppIndex) -> Option<&'a Deskt
 }
 
 pub fn launch_desktop_app(app: &DesktopApp) -> bool {
-    // Try gtk-launch first if available
-    let res = Command::new("gtk-launch")
-        .arg(app.desktop_file.file_name().unwrap_or_default())
-        .spawn();
-
-    if res.is_ok() {
-        return true;
+    if let Some(fname) = app.desktop_file.file_name() {
+        if Command::new("gtk-launch")
+            .arg(fname)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .is_ok()
+        {
+            return true;
+        }
     }
 
-    // Fallback: spawn the exec string directly
     Command::new("sh")
         .arg("-c")
-        .arg(format!("{} &", app.exec))
+        .arg(format!("nohup {} >/dev/null 2>&1 &", app.exec))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .is_ok()
+}
+
+/// Helper chạy ydotool (cần ydotoold) hoặc xdotool (trên X11)
+fn send_shortcut(ydotool_keys: &[&str], xdotool_key: &str) -> bool {
+    if let Ok(out) = Command::new("ydotool")
+        .arg("key")
+        .args(ydotool_keys)
+        .output()
+    {
+        if out.status.success() {
+            return true;
+        }
+    }
+
+    if let Ok(out) = Command::new("xdotool").args(["key", xdotool_key]).output() {
+        if out.status.success() {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub fn close_active_window(dry_run: bool) -> (bool, String) {
@@ -164,23 +194,27 @@ pub fn close_active_window(dry_run: bool) -> (bool, String) {
         return (true, "Đã đóng cửa sổ hiện tại cho bạn.".to_string());
     }
 
-    // Hyprland: hyprctl dispatch killactive
-    let hypr = Command::new("hyprctl")
-        .args(["dispatch", "killactive"])
-        .output();
-
-    if let Ok(out) = hypr {
-        if out.status.success() {
-            return (true, "Đã đóng cửa sổ hiện tại.".to_string());
+    if is_hyprland() {
+        if let Ok(out) = Command::new("hyprctl")
+            .args(["dispatch", "killactive"])
+            .output()
+        {
+            if out.status.success() {
+                return (true, "Đã đóng cửa sổ hiện tại.".to_string());
+            }
         }
     }
 
-    // Generic X11/Wayland with xdotool / ydotool or GNOME
-    let _ = Command::new("ydotool")
-        .args(["key", "29:1", "56:1", "14:1", "14:0", "56:0", "29:0"]) // Alt+F4
-        .output();
+    // Alt (56) + F4 (62) theo linux/input-event-codes.h
+    if send_shortcut(&["56:1", "62:1", "62:0", "56:0"], "alt+F4") {
+        return (true, "Đã đóng cửa sổ hiện tại.".to_string());
+    }
 
-    (true, "Đã gửi lệnh đóng cửa sổ hiện tại.".to_string())
+    (
+        true,
+        "Không thể gửi phím đóng cửa sổ trên GNOME Wayland. Bạn hãy cài và bật dịch vụ ydotoold nhé."
+            .to_string(),
+    )
 }
 
 pub fn close_active_tab(dry_run: bool) -> (bool, String) {
@@ -188,25 +222,57 @@ pub fn close_active_tab(dry_run: bool) -> (bool, String) {
         return (true, "Đã đóng thẻ trình duyệt hiện tại.".to_string());
     }
 
-    let _ = Command::new("sh")
-        .arg("-c")
-        .arg("wtype -M ctrl -k w -m ctrl 2>/dev/null || ydotool key 29:1 17:1 17:0 29:0 2>/dev/null")
-        .spawn();
+    if is_hyprland() {
+        if let Ok(out) = Command::new("wtype")
+            .args(["-M", "ctrl", "-k", "w", "-m", "ctrl"])
+            .output()
+        {
+            if out.status.success() {
+                return (true, "Đã đóng tab hiện tại cho bạn rồi nhé.".to_string());
+            }
+        }
+    }
 
-    (true, "Đã đóng tab hiện tại cho bạn rồi nhé.".to_string())
+    // Ctrl (29) + W (17)
+    if send_shortcut(&["29:1", "17:1", "17:0", "29:0"], "ctrl+w") {
+        return (true, "Đã đóng tab hiện tại cho bạn rồi nhé.".to_string());
+    }
+
+    (
+        true,
+        "Không thể gửi phím đóng tab trên GNOME Wayland. Bạn hãy cài và bật ydotoold nhé."
+            .to_string(),
+    )
 }
 
 pub fn close_all_open_apps(dry_run: bool) -> (bool, String) {
     if dry_run {
         return (true, "Đã đóng tất cả các ứng dụng đang mở.".to_string());
     }
-    // Safe close non-essential apps
-    let _ = Command::new("sh")
-        .arg("-c")
-        .arg("pkill -f 'chrome|firefox|spotify|code|discord|telegram' 2>/dev/null")
-        .output();
 
-    (true, "Đã gửi lệnh đóng toàn bộ ứng dụng đang mở.".to_string())
+    let safe_targets = [
+        "chrome",
+        "firefox",
+        "firefox-bin",
+        "spotify",
+        "code",
+        "discord",
+        "telegram-desktop",
+    ];
+    let mut closed_any = false;
+    for proc_name in safe_targets {
+        if let Ok(out) = Command::new("pkill").args(["-x", proc_name]).output() {
+            if out.status.success() {
+                closed_any = true;
+            }
+        }
+    }
+
+    if closed_any {
+        (true, "Đã đóng các ứng dụng đang mở cho bạn.".to_string())
+    } else {
+        (true, "Hiện không có ứng dụng phổ biến nào đang mở để đóng.".to_string())
+    }
 }
 
 pub fn close_specific_app(app_target: &str, index: &AppIndex, dry_run: bool) -> (bool, String) {
@@ -214,27 +280,50 @@ pub fn close_specific_app(app_target: &str, index: &AppIndex, dry_run: bool) -> 
         return (true, format!("Đã đóng ứng dụng {}.", app_target));
     }
 
-    let bin_name = match app_target.to_lowercase().as_str() {
-        "chrome" | "google chrome" => "chrome",
-        "firefox" => "firefox",
-        "spotify" => "spotify",
-        "vs code" | "vscode" | "code" => "code",
-        "zalo" => "zalo",
-        "telegram" => "telegram",
+    let target_low = app_target.to_lowercase();
+    let proc_candidates: Vec<String> = match target_low.as_str() {
+        "chrome" | "google chrome" => vec!["chrome".into(), "google-chrome".into()],
+        "firefox" => vec!["firefox".into(), "firefox-bin".into()],
+        "spotify" => vec!["spotify".into()],
+        "vs code" | "vscode" | "code" => vec!["code".into()],
+        "zalo" => vec!["zalo".into(), "Zalo".into()],
+        "telegram" => vec!["telegram-desktop".into(), "Telegram".into()],
         _ => {
             if let Some(app) = match_app(app_target, index) {
-                app.exec.split_whitespace().next().unwrap_or(app_target)
+                // Lấy tên binary cuối cùng trong đường dẫn Exec, bỏ qua wrapper nguy hiểm
+                let first_token = app
+                    .exec
+                    .split_whitespace()
+                    .find(|tok| !tok.contains('=') && *tok != "env")
+                    .unwrap_or(app_target)
+                    .trim_matches('"');
+                let bin = Path::new(first_token)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(first_token);
+                if matches!(bin, "sh" | "bash" | "zsh" | "flatpak" | "snap") {
+                    vec![target_low]
+                } else {
+                    vec![bin.to_string()]
+                }
             } else {
-                app_target
+                vec![target_low]
             }
         }
     };
 
-    let _ = Command::new("pkill")
-        .args(["-f", bin_name])
-        .output();
+    for proc_name in &proc_candidates {
+        if let Ok(out) = Command::new("pkill").args(["-i", "-x", proc_name]).output() {
+            if out.status.success() {
+                return (true, format!("Đã đóng ứng dụng {} cho bạn rồi nhé.", app_target));
+            }
+        }
+    }
 
-    (true, format!("Đã đóng ứng dụng {} cho bạn rồi nhé.", app_target))
+    (
+        true,
+        format!("Hiện không thấy ứng dụng {} đang chạy trên máy.", app_target),
+    )
 }
 
 pub fn switch_hyprland_workspace(ws_num: i32) -> (bool, String) {
@@ -273,27 +362,88 @@ pub fn toggle_window_pin() -> (bool, String) {
     (true, "Đã ghim cửa sổ này hiển thị trên mọi không gian làm việc.".to_string())
 }
 
-pub fn set_window_fullscreen(enable: bool) {
-    let arg = if enable { "1" } else { "0" };
-    let _ = Command::new("hyprctl")
-        .args(["dispatch", "fullscreen", arg])
-        .output();
+pub fn set_window_fullscreen(enable: bool) -> (bool, String) {
+    if is_hyprland() {
+        let arg = if enable { "1" } else { "0" };
+        if let Ok(out) = Command::new("hyprctl")
+            .args(["dispatch", "fullscreen", arg])
+            .output()
+        {
+            if out.status.success() {
+                let msg = if enable {
+                    "Đã phóng to tối đa cửa sổ cho bạn rồi nhé."
+                } else {
+                    "Đã đưa cửa sổ về kích thước tiêu chuẩn."
+                };
+                return (true, msg.to_string());
+            }
+        }
+    }
+
+    // Ubuntu GNOME: Super+Up (125+103) phóng to, Super+Down (125+108) thu về bình thường
+    let ok = if enable {
+        send_shortcut(&["125:1", "103:1", "103:0", "125:0"], "Super_L+Up")
+    } else {
+        send_shortcut(&["125:1", "108:1", "108:0", "125:0"], "Super_L+Down")
+    };
+
+    if ok {
+        let msg = if enable {
+            "Đã phóng to cửa sổ cho bạn rồi nhé."
+        } else {
+            "Đã thu gọn cửa sổ về kích thước tiêu chuẩn."
+        };
+        (true, msg.to_string())
+    } else {
+        (
+            true,
+            "Không thể chỉnh kích thước cửa sổ trên GNOME Wayland vì chưa có ydotoold.".to_string(),
+        )
+    }
 }
 
 pub fn toggle_hyprland_split() -> (bool, String) {
-    let _ = Command::new("hyprctl")
-        .args(["dispatch", "togglesplit"])
-        .output();
-
-    (true, "Đã đổi hướng chia màn hình cho bạn rồi nhé.".to_string())
+    if is_hyprland() {
+        if let Ok(out) = Command::new("hyprctl")
+            .args(["dispatch", "togglesplit"])
+            .output()
+        {
+            if out.status.success() {
+                return (true, "Đã đổi hướng chia màn hình cho bạn rồi nhé.".to_string());
+            }
+        }
+    }
+    (
+        true,
+        "Tính năng xoay hướng chia màn hình hiện chỉ hỗ trợ trên Hyprland.".to_string(),
+    )
 }
 
 pub fn set_hyprland_split_ratio(ratio: &str) -> (bool, String) {
-    let _ = Command::new("hyprctl")
-        .args(["dispatch", "splitratio", ratio])
-        .output();
+    if is_hyprland() {
+        if let Ok(out) = Command::new("hyprctl")
+            .args(["dispatch", "splitratio", ratio])
+            .output()
+        {
+            if out.status.success() {
+                return (
+                    true,
+                    format!("Đã điều chỉnh tỷ lệ chia màn hình {} cho bạn.", ratio),
+                );
+            }
+        }
+    }
 
-    (true, format!("Đã điều chỉnh tỷ lệ chia màn hình {} cho bạn.", ratio))
+    // Trên Ubuntu GNOME, hỗ trợ nhanh chia đôi 50/50 bằng Super+Left (125+105)
+    if ratio == "1.0" && send_shortcut(&["125:1", "105:1", "105:0", "125:0"], "Super_L+Left") {
+        return (true, "Đã ghim cửa sổ sang nửa trái màn hình cho bạn.".to_string());
+    }
+
+    (
+        true,
+        "Tính năng chia tỷ lệ cửa sổ tùy biến hiện chỉ hỗ trợ trên Hyprland hoặc khi bật ydotoold trên Ubuntu."
+            .to_string(),
+    )
 }
 
 pub fn apply_workspace_preset(preset: &str, index: &AppIndex, dry_run: bool) -> (bool, String) {

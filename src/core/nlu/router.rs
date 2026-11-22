@@ -98,7 +98,7 @@ fn fast_path_nlu_internal(
         if dry_run {
             return (true, "Nội dung trong bộ nhớ tạm.".to_string());
         }
-        return (true, "Bộ nhớ tạm hiện đang hoạt động bình thường.".to_string());
+        return (true, get_clipboard_content());
     }
 
     // 2.6. Network speed
@@ -202,36 +202,42 @@ fn fast_path_nlu_internal(
 
     // 4.2. ASUS Fan Profiles
     if ASUS_TURBO_RE.is_match(&t) {
-        if !dry_run {
-            set_asus_profile("Performance");
+        if dry_run {
+            return (true, "Đã chuyển sang chế độ Hiệu năng cao Turbo cho bạn.".to_string());
         }
-        return (true, "Đã chuyển sang chế độ Hiệu năng cao Turbo cho bạn.".to_string());
+        return (true, set_asus_profile("Performance"));
     }
     if ASUS_QUIET_RE.is_match(&t) {
-        if !dry_run {
-            set_asus_profile("Quiet");
+        if dry_run {
+            return (true, "Đã chuyển sang chế độ Yên tĩnh tiết kiệm pin.".to_string());
         }
-        return (true, "Đã chuyển sang chế độ Yên tĩnh tiết kiệm pin.".to_string());
+        return (true, set_asus_profile("Quiet"));
     }
     if ASUS_BALANCED_RE.is_match(&t) {
-        if !dry_run {
-            set_asus_profile("Balanced");
+        if dry_run {
+            return (true, "Đã chuyển về chế độ Cân bằng mượt mà.".to_string());
         }
-        return (true, "Đã chuyển về chế độ Cân bằng mượt mà.".to_string());
+        return (true, set_asus_profile("Balanced"));
     }
 
     // 5. Brightness
     if BRIGHTNESS_UP_RE.is_match(&t) {
-        if !dry_run {
-            adjust_brightness("+10%");
+        if dry_run {
+            return (true, "Đã tăng độ sáng màn hình rồi nhé.".to_string());
         }
-        return (true, "Đã tăng độ sáng màn hình rồi nhé.".to_string());
+        if adjust_brightness("+10%") {
+            return (true, "Đã tăng độ sáng màn hình rồi nhé.".to_string());
+        }
+        return (true, "Không thể chỉnh độ sáng màn hình trên thiết bị này.".to_string());
     }
     if BRIGHTNESS_DOWN_RE.is_match(&t) {
-        if !dry_run {
-            adjust_brightness("10%-");
+        if dry_run {
+            return (true, "Đã giảm độ sáng màn hình cho bạn.".to_string());
         }
-        return (true, "Đã giảm độ sáng màn hình cho bạn.".to_string());
+        if adjust_brightness("10%-") {
+            return (true, "Đã giảm độ sáng màn hình cho bạn.".to_string());
+        }
+        return (true, "Không thể chỉnh độ sáng màn hình trên thiết bị này.".to_string());
     }
 
     // 6. Lock screen & Screenshot
@@ -243,10 +249,10 @@ fn fast_path_nlu_internal(
     }
     if SCREENSHOT_RE.is_match(&t) {
         let mode = if t.contains("toàn") { "full" } else { "region" };
-        if !dry_run {
-            take_screenshot(mode);
+        if dry_run {
+            return (true, "Đã kích hoạt chụp ảnh màn hình cho bạn.".to_string());
         }
-        return (true, "Đã kích hoạt chụp ảnh màn hình cho bạn.".to_string());
+        return (true, take_screenshot(mode));
     }
 
     // 6.1. Close all apps
@@ -278,16 +284,16 @@ fn fast_path_nlu_internal(
 
     // 6.6. Fullscreen / Maximize
     if FULLSCREEN_ON_RE.is_match(&t) {
-        if !dry_run {
-            set_window_fullscreen(true);
+        if dry_run {
+            return (true, "Đã phóng to tối đa cửa sổ cho bạn rồi nhé.".to_string());
         }
-        return (true, "Đã phóng to tối đa cửa sổ cho bạn rồi nhé.".to_string());
+        return set_window_fullscreen(true);
     }
     if FULLSCREEN_OFF_RE.is_match(&t) {
-        if !dry_run {
-            set_window_fullscreen(false);
+        if dry_run {
+            return (true, "Đã đưa cửa sổ về kích thước tiêu chuẩn.".to_string());
         }
-        return (true, "Đã đưa cửa sổ về kích thước tiêu chuẩn.".to_string());
+        return set_window_fullscreen(false);
     }
 
     // 6.7. Split layout

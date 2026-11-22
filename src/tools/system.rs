@@ -1,6 +1,10 @@
 use chrono::{Datelike, Local, Timelike};
 use std::fs;
-use std::process::Command;
+use std::process::{Command, Stdio};
+
+pub fn is_hyprland() -> bool {
+    std::env::var("HYPRLAND_INSTANCE_SIGNATURE").is_ok()
+}
 
 pub fn get_vietnamese_time() -> String {
     let now = Local::now();
@@ -28,7 +32,6 @@ pub fn get_vietnamese_date() -> String {
 }
 
 pub fn get_battery_info() -> String {
-    // Read directly from sysfs: zero subprocess overhead
     for entry in walkdir::WalkDir::new("/sys/class/power_supply")
         .min_depth(1)
         .max_depth(1)
@@ -39,21 +42,46 @@ pub fn get_battery_info() -> String {
         let cap_file = path.join("capacity");
         let status_file = path.join("status");
         if cap_file.exists() {
-            let cap = fs::read_to_string(&cap_file)
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| "85".to_string());
-            let status = fs::read_to_string(&status_file)
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|_| "Discharging".to_string());
-            let vi_status = match status.as_str() {
-                "Charging" => "đang sạc pin",
-                "Full" => "đã sạc đầy",
-                _ => "đang dùng pin",
-            };
-            return format!("Pin hiện tại còn {} phần trăm, máy {}.", cap, vi_status);
+            if let Ok(cap_raw) = fs::read_to_string(&cap_file) {
+                let cap = cap_raw.trim();
+                let status = fs::read_to_string(&status_file)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|_| "Discharging".to_string());
+                let vi_status = match status.as_str() {
+                    "Charging" => "đang sạc pin",
+                    "Full" => "đã sạc đầy",
+                    _ => "đang dùng pin",
+                };
+                return format!("Pin hiện tại còn {} phần trăm, máy {}.", cap, vi_status);
+            }
         }
     }
     "Không tìm thấy pin laptop hoặc máy tính đang dùng nguồn điện trực tiếp.".to_string()
+}
+
+pub fn get_clipboard_content() -> String {
+    let commands: &[(&str, &[&str])] = &[
+        ("wl-paste", &["--no-newline"]),
+        ("xclip", &["-o", "-selection", "clipboard"]),
+        ("xsel", &["--clipboard", "--output"]),
+    ];
+
+    for &(bin, args) in commands {
+        if let Ok(out) = Command::new(bin).args(args).output() {
+            if out.status.success() {
+                let content = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if content.is_empty() {
+                    return "Bộ nhớ tạm hiện đang trống.".to_string();
+                }
+                // Giới hạn độ dài để TTS không đọc quá lâu nếu clipboard chứa log/code lớn
+                let preview: String = content.chars().take(240).collect();
+                let suffix = if content.chars().count() > 240 { "..." } else { "" };
+                return format!("Nội dung trong bộ nhớ tạm là: {}{}", preview, suffix);
+            }
+        }
+    }
+
+    "Không thể đọc bộ nhớ tạm. Bạn hãy cài thêm wl-clipboard hoặc xclip trên Ubuntu nhé.".to_string()
 }
 
 pub fn get_cpu_info() -> String {
@@ -108,7 +136,7 @@ pub fn get_system_hardware_info() -> String {
 
 pub fn get_network_speed_info() -> String {
     let output = Command::new("ping")
-        .args(["-c", "1", "-W", "1", "8.8.8.8"])
+        .args(["-c", "1", "-W", "2", "8.8.8.8"])
         .output();
 
     if let Ok(out) = output {
@@ -116,12 +144,13 @@ pub fn get_network_speed_info() -> String {
             let text = String::from_utf8_lossy(&out.stdout);
             if let Some(idx) = text.find("time=") {
                 let rest = &text[idx + 5..];
-                let time_ms = rest.split_whitespace().next().unwrap_or("25 ms");
-                return format!("Độ trễ mạng Internet là {}, kết nối ổn định.", time_ms);
+                let time_ms = rest.split_whitespace().next().unwrap_or("0");
+                return format!("Độ trễ mạng Internet là {} mili giây, kết nối ổn định.", time_ms);
             }
+            return "Kết nối mạng Internet đang hoạt động bình thường.".to_string();
         }
     }
-    "Độ trễ mạng Internet khoảng 35 ms, kết nối mạng hoạt động bình thường.".to_string()
+    "Hiện tại không thể kết nối tới Internet. Bạn hãy kiểm tra lại Wi-Fi hoặc dây mạng nhé.".to_string()
 }
 
 pub fn set_system_volume(percent: u32) {
@@ -144,10 +173,34 @@ pub fn toggle_system_mute() {
         .output();
 }
 
-pub fn adjust_brightness(delta: &str) {
-    let _ = Command::new("brightnessctl")
-        .args(["set", delta])
-        .output();
+pub fn adjust_brightness(delta: &str) -> bool {
+    if let Ok(out) = Command::new("brightnessctl").args(["set", delta]).output() {
+        if out.status.success() {
+            return true;
+        }
+    }
+
+    // Fallback chuẩn trên Ubuntu GNOME qua SettingsDaemon D-Bus (không cần quyền nhóm video)
+    let method = if delta.contains('-') {
+        "org.gnome.SettingsDaemon.Power.Screen.StepDown"
+    } else {
+        "org.gnome.SettingsDaemon.Power.Screen.StepUp"
+    };
+
+    Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.gnome.SettingsDaemon.Power",
+            "--object-path",
+            "/org/gnome/SettingsDaemon/Power",
+            "--method",
+            method,
+        ])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 pub fn set_wifi_state(enable: bool) {
@@ -164,21 +217,68 @@ pub fn set_bluetooth_state(enable: bool) {
         .output();
 }
 
-pub fn set_asus_profile(profile: &str) {
-    let code = match profile {
-        "Quiet" => "2",
-        "Performance" => "1",
-        _ => "0",
+pub fn set_asus_profile(profile: &str) -> String {
+    let (ppd_name, label, sysfs_code) = match profile {
+        "Quiet" => ("power-saver", "Yên tĩnh tiết kiệm pin", "2"),
+        "Performance" => ("performance", "Hiệu năng cao Turbo", "1"),
+        _ => ("balanced", "Cân bằng mượt mà", "0"),
     };
+
+    // 1. Chuẩn Ubuntu GNOME (không cần quyền root)
+    if let Ok(out) = Command::new("powerprofilesctl")
+        .args(["set", ppd_name])
+        .output()
+    {
+        if out.status.success() {
+            return format!("Đã chuyển sang chế độ {} cho bạn.", label);
+        }
+    }
+
+    // 2. Nếu máy có cài asusctl
+    if let Ok(out) = Command::new("asusctl")
+        .args(["profile", "-P", profile])
+        .output()
+    {
+        if out.status.success() {
+            return format!("Đã chuyển sang chế độ {} qua asusctl.", label);
+        }
+    }
+
+    // 3. Fallback ghi sysfs trực tiếp (chỉ chạy nếu có quyền udev/root)
     let sys_path = "/sys/devices/platform/asus-nb-wmi/throttle_thermal_policy";
-    let _ = fs::write(sys_path, code);
+    if fs::write(sys_path, sysfs_code).is_ok() {
+        return format!("Đã chuyển sang chế độ {} cho bạn.", label);
+    }
+
+    "Không thể đổi chế độ hiệu năng. Bạn hãy kiểm tra dịch vụ power-profiles-daemon trên Ubuntu nhé.".to_string()
 }
 
 pub fn lock_screen() {
-    let _ = Command::new("loginctl").arg("lock-session").spawn();
+    let ok = Command::new("loginctl")
+        .arg("lock-session")
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !ok {
+        let _ = Command::new("gdbus")
+            .args([
+                "call",
+                "--session",
+                "--dest",
+                "org.gnome.ScreenSaver",
+                "--object-path",
+                "/org/gnome/ScreenSaver",
+                "--method",
+                "org.gnome.ScreenSaver.Lock",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
 }
 
-pub fn take_screenshot(mode: &str) {
+pub fn take_screenshot(mode: &str) -> String {
     let dest = dirs::picture_dir()
         .map(|p| p.join("Screenshots"))
         .unwrap_or_else(|| dirs::home_dir().unwrap_or_default().join("Pictures/Screenshots"));
@@ -186,14 +286,58 @@ pub fn take_screenshot(mode: &str) {
     let filename = format!("screenshot_{}.png", Local::now().format("%Y%m%d_%H%M%S"));
     let path = dest.join(filename);
 
-    if mode == "region" {
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(format!("grim -g \"$(slurp)\" \"{}\"", path.display()))
-            .spawn();
-    } else {
-        let _ = Command::new("grim").arg(&path).spawn();
+    // 1. Hyprland / wlroots
+    if is_hyprland() {
+        let spawned = if mode == "region" {
+            Command::new("sh")
+                .arg("-c")
+                .arg(format!("grim -g \"$(slurp)\" \"{}\"", path.display()))
+                .spawn()
+                .is_ok()
+        } else {
+            Command::new("grim").arg(&path).spawn().is_ok()
+        };
+        if spawned {
+            return "Đã kích hoạt chụp ảnh màn hình cho bạn.".to_string();
+        }
     }
+
+    // 2. Ubuntu GNOME: ưu tiên gnome-screenshot nếu đã cài
+    let mut gs = Command::new("gnome-screenshot");
+    if mode == "region" {
+        gs.arg("-a");
+    }
+    gs.arg("-f").arg(&path);
+    if gs.stdout(Stdio::null()).stderr(Stdio::null()).spawn().is_ok() {
+        return "Đã kích hoạt chụp ảnh màn hình và lưu vào thư mục Pictures/Screenshots.".to_string();
+    }
+
+    // 3. Fallback chuẩn Wayland mọi bản Ubuntu GNOME qua XDG Desktop Portal (không cần cài thêm app)
+    let interactive = if mode == "region" { "true" } else { "false" };
+    let options = format!("{{'interactive': <{}>}}", interactive);
+    let portal_ok = Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.portal.Desktop",
+            "--object-path",
+            "/org/freedesktop/portal/desktop",
+            "--method",
+            "org.freedesktop.portal.Screenshot.Screenshot",
+            "",
+            &options,
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .is_ok();
+
+    if portal_ok {
+        return "Đã mở công cụ chụp ảnh màn hình của Ubuntu cho bạn.".to_string();
+    }
+
+    "Không tìm thấy công cụ chụp màn hình. Bạn có thể cài thêm gnome-screenshot nhé.".to_string()
 }
 
 pub fn media_pause() {
