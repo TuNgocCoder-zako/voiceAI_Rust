@@ -55,6 +55,29 @@ impl HighPassFilter {
             *s = y0.clamp(-32768.0, 32767.0) as i16;
         }
     }
+
+    /// Lọc từng mẫu chuẩn hóa [-1.0, 1.0] giữ nguyên trạng thái bộ lọc xuyên suốt phiên chạy
+    #[inline]
+    pub fn process_sample_f32(&mut self, x0: f32) -> f32 {
+        const B0: f32 = 0.972614;
+        const B1: f32 = -1.945228;
+        const B2: f32 = 0.972614;
+        const A1: f32 = -1.944480;
+        const A2: f32 = 0.945978;
+
+        let y0 = B0 * x0 + B1 * self.x1 + B2 * self.x2 - A1 * self.y1 - A2 * self.y2;
+        self.x2 = self.x1;
+        self.x1 = x0;
+        self.y2 = self.y1;
+        self.y1 = y0;
+        y0.clamp(-1.0, 1.0)
+    }
+
+    pub fn process_f32_in_place(&mut self, samples: &mut [f32]) {
+        for s in samples.iter_mut() {
+            *s = self.process_sample_f32(*s);
+        }
+    }
 }
 
 impl Default for HighPassFilter {

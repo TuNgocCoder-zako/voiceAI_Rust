@@ -642,6 +642,7 @@ async fn capture_and_handle_followup(
     play_chime(ChimeType::Wake);
     // Chờ tiếng chime dứt hẳn để mic không thu lại tiếng loa
     tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+    recorder.flush(); // Xả sạch tiếng chime ra khỏi ring buffer
 
     if state_manager.is_interrupted() {
         return;
@@ -772,6 +773,7 @@ async fn run_wake_word_loop(
         // 3. Tạm dừng thu wake word khi hệ thống đang bận (Thinking / Speaking từ IPC hoặc Timer)
         if tts.is_speaking() || state_manager.get_state_sync() != AssistantState::Idle {
             tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+            recorder.flush();
             continue;
         }
 
