@@ -23,7 +23,7 @@ impl WakeWordType {
 // Bao quát toàn diện các biến thể ngữ âm học mà Whisper thường nhận diện khi người Việt gọi:
 // Alexa, Alex, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, Được xe, Tuyệt sợi...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik|lai|lay)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*(?:le|lech|lec)\s*[-_]?\s*(?:xa|sa|ca|sach|say)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -207,6 +207,8 @@ mod tests {
             ("2 xa chạm pin còn bao nhiêu", "chạm pin còn bao nhiêu"),
             ("Ai xa mấy giờ rồi", "mấy giờ rồi"),
             ("A xa mở trình duyệt", "mở trình duyệt"),
+            ("A lai xa mấy giờ rồi", "mấy giờ rồi"),
+            ("A lê sạch", ""),
         ];
         for (input, expected_cmd) in cases {
             let r = detect_wake_word(input);
