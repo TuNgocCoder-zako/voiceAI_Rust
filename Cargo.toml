@@ -14,11 +14,16 @@ path = "src/lib.rs"
 name = "ai-assistant"
 path = "src/bin/ai-assistant.rs"
 
+[[bin]]
+name = "voice-overlay"
+path = "src/bin/voice-overlay.rs"
+
 [[bench]]
 name = "bench_nlu"
 harness = false
 
 [dependencies]
+gtk4 = "0.11"
 tokio = { version = "1.43", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

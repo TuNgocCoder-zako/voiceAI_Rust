@@ -30,7 +30,7 @@ static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro\s*ly\s*oi|oi\s*tro\s*ly|cho\s*ly\s*oi)|(?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)(?:tro\s*ly|cho\s*ly))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro\s*ly\s*oi|oi\s*tro\s*ly|cho\s*ly\s*oi|cho\s*lay\s*oi|tro\s*lay\s*oi)|(?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)(?:tro\s*ly|cho\s*ly|cho\s*lay))\b").unwrap()
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {

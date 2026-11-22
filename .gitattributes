@@ -1,2 +1,11 @@
 # GitHub Linguist settings
+* linguist-vendored=false
 *.rs linguist-detectable=true
+*.py linguist-detectable=false
+*.ipynb linguist-detectable=false
+*.qml linguist-detectable=false
+overlay/* linguist-documentation=true
+docs/* linguist-documentation=true
+benches/* linguist-documentation=true
+logs/* linguist-vendored=true
+models/* linguist-vendored=true

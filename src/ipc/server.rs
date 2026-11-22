@@ -108,6 +108,8 @@ impl IpcServer {
                                     if let Ok(mut resp_str) = serde_json::to_string(&resp) {
                                         resp_str.push('\n');
                                         let _ = write_half.write_all(resp_str.as_bytes()).await;
+                                        let _ = write_half.flush().await;
+                                        let _ = write_half.shutdown().await;
                                     }
                                 }
                             }

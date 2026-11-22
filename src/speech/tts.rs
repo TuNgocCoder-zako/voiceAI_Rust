@@ -68,9 +68,9 @@ impl PiperTts {
 
         self.is_speaking.store(true, Ordering::SeqCst);
 
-        // Khởi tạo tiến trình pw-play nhận raw PCM từ stdin
-        let mut pw_play = match Command::new("pw-play")
-            .args(["--rate", "22050", "--channels", "1", "--format", "s16", "-"])
+        // Khởi tạo tiến trình pw-cat nhận raw PCM từ stdin (--raw chế độ stream trực tiếp)
+        let mut pw_play = match Command::new("pw-cat")
+            .args(["-p", "--raw", "--rate", "22050", "--channels", "1", "--format", "s16", "-"])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

@@ -12,6 +12,8 @@ Restart=always
 RestartSec=3
 Environment=PATH=/home/ngoctu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=DISPLAY=:0
 StandardOutput=journal
 StandardError=journal
 

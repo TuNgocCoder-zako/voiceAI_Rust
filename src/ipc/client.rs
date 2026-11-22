@@ -33,6 +33,7 @@ pub async fn send_ipc_command<P: AsRef<Path>>(
     let mut line = serde_json::to_string(&payload)?;
     line.push('\n');
     stream.write_all(line.as_bytes()).await?;
+    stream.flush().await?;
 
     let mut reader = BufReader::new(stream);
     let mut resp_line = String::new();
