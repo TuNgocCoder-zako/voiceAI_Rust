@@ -100,6 +100,8 @@ impl WhisperEngine {
                 "-np",
                 "-t",
                 &self.threads.to_string(),
+                "--prompt",
+                "Alexa, Hey Jarvis, Trợ lý ơi",
             ])
             .output()?;
 
@@ -123,6 +125,18 @@ impl WhisperEngine {
         let text = clean_lines.join(" ").trim().to_string();
 
         if is_hallucination(&text) {
+            return Ok(String::new());
+        }
+
+        // Chống hallucination lặp lại nguyên văn chuỗi prompt mồi
+        let unacc = crate::core::nlu::strip_vietnamese_accents(&text).to_lowercase();
+        let prompt_hallucinations = [
+            "alexa, hey jarvis, tro ly oi",
+            "alexa, hey jarvis, tro ly",
+            "alexa hey jarvis",
+            "hey jarvis, tro ly oi",
+        ];
+        if prompt_hallucinations.iter().any(|&p| unacc == p) {
             return Ok(String::new());
         }
 

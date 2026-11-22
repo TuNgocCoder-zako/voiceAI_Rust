@@ -27,7 +27,8 @@ impl AudioRecorder {
         state_mgr: Option<&StateManager>,
     ) -> Result<Vec<i16>, Box<dyn std::error::Error>> {
         let chunk_bytes = self.chunk_samples * 2; // 16-bit PCM = 2 bytes/sample
-        let max_chunks = (max_duration_secs * (self.sample_rate as f32 / self.chunk_samples as f32)) as usize;
+        let max_speech_chunks = (7.0f32 * (self.sample_rate as f32 / self.chunk_samples as f32)) as usize;
+        let max_chunks = ((max_duration_secs.max(2.5)) * (self.sample_rate as f32 / self.chunk_samples as f32)) as usize;
         let mut preroll_buffer: VecDeque<Vec<i16>> = VecDeque::with_capacity(6);
         let mut recorded_chunks: Vec<Vec<i16>> = Vec::new();
         let mut ambient_rms_samples: Vec<f32> = Vec::new();
@@ -115,8 +116,8 @@ impl AudioRecorder {
                     preroll_buffer.pop_front();
                 }
 
-                // Nếu người dùng không nói gì trong 2.2 giây thì dừng (giúp vòng lặp túc trực nhanh nhạy)
-                if i * 100 >= 2200 {
+                // Nếu người dùng chưa bắt đầu nói gì trong 2.0 giây thì dừng để vòng lặp túc trực xoay vòng
+                if i * 100 >= 2000 {
                     break;
                 }
             } else {
@@ -128,7 +129,7 @@ impl AudioRecorder {
                 }
                 recorded_chunks.push(chunk);
 
-                if should_stop {
+                if should_stop || recorded_chunks.len() >= max_speech_chunks {
                     break;
                 }
             }
@@ -137,10 +138,21 @@ impl AudioRecorder {
         let _ = child.kill();
         let _ = child.wait();
 
+        // Nếu người dùng nói dưới 250ms (chỉ là tiếng click chuột, ho nhẹ hoặc tiếng gõ phím)
+        if vad.spoken_duration_ms < 250 {
+            return Ok(Vec::new());
+        }
+
         // Ghép các chunk thành chuỗi âm thanh hoàn chỉnh
         let mut full_samples: Vec<i16> = Vec::new();
         for chunk in recorded_chunks {
             full_samples.extend(chunk);
+        }
+
+        let max_abs = full_samples.iter().map(|&s| s.abs()).max().unwrap_or(0);
+        if max_abs < 600 {
+            // Âm lượng quá nhỏ dưới ngưỡng nghe được, bỏ qua
+            return Ok(Vec::new());
         }
 
         // Tự động chuẩn hóa biên độ âm thanh (Automatic Gain Control)

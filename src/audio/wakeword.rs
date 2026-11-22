@@ -20,9 +20,10 @@ impl WakeWordType {
 }
 
 // Regex trên chuỗi đã chuẩn hóa bỏ dấu tiếng Việt (lowercase)
-// Bao quát: Alexa, Alex, A lếch, A léc, A lek, A lếch xa, A lếch sa, A léc xa, A léc sa, Aleksa, Alecxia...
+// Bao quát toàn diện các biến thể ngữ âm học mà Whisper thường nhận diện khi người Việt gọi:
+// Alexa, Alex, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, Được xe, Tuyệt sợi...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|duoc\s*xe|dua\s*xe|tuyet\s*(?:soi|so|sa|xoi|xa)|tiet\s*(?:soi|so|sa|xoi|xa)|anh\s*thit\s*(?:sach|say)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -30,7 +31,7 @@ static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro\s*ly\s*oi|oi\s*tro\s*ly|cho\s*ly\s*oi|cho\s*lay\s*oi|tro\s*lay\s*oi)|(?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)(?:tro\s*ly|cho\s*ly|cho\s*lay))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro|cho)\s*(?:ly|lay)(?:\s*(?:oi|o|a|e|ha|nhe|nao))?|(?:em|ban|chi)\s*oi)\b").unwrap()
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -173,6 +174,10 @@ mod tests {
             ("Aleksa ơi, pin còn bao nhiêu", "pin còn bao nhiêu"),
             ("Alo Alexa", ""),
             ("Ê lếch xa", ""),
+            ("2 xa chạm pin còn bao nhiêu", "chạm pin còn bao nhiêu"),
+            ("Ai xa mấy giờ rồi", "mấy giờ rồi"),
+            ("A xa mở trình duyệt", "mở trình duyệt"),
+            ("Được xe bấy giờ là mấy giờ rồi", "bấy giờ là mấy giờ rồi"),
         ];
         for (input, expected_cmd) in cases {
             let r = detect_wake_word(input);
@@ -185,11 +190,22 @@ mod tests {
 
     #[test]
     fn test_detect_assistant() {
-        let res = detect_wake_word("Trợ lý ơi, kiểm tra pin");
-        assert!(res.is_some());
-        let (ww, cmd) = res.unwrap();
-        assert_eq!(ww, WakeWordType::Assistant);
-        assert_eq!(cmd, "kiểm tra pin");
+        let cases = [
+            ("Trợ lý ơi, kiểm tra pin", "kiểm tra pin"),
+            ("Trợ lý ơ, mấy giờ rồi", "mấy giờ rồi"),
+            ("Trợ lý à", ""),
+            ("Trợ lý", ""),
+            ("chợ lấy ơi, mở visual studio code", "mở visual studio code"),
+            ("Alo trợ lý", ""),
+            ("Em ơi mấy giờ rồi", "mấy giờ rồi"),
+        ];
+        for (input, expected_cmd) in cases {
+            let res = detect_wake_word(input);
+            assert!(res.is_some(), "Không nhận diện được assistant từ '{}'", input);
+            let (ww, cmd) = res.unwrap();
+            assert_eq!(ww, WakeWordType::Assistant);
+            assert_eq!(cmd, expected_cmd, "Sai cmd từ '{}'", input);
+        }
     }
 
     #[test]
