@@ -28,11 +28,49 @@ impl WhisperEngine {
             base_dir.join("models/whisper/ggml-base.bin")
         });
 
+        let num_cpus = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(4).min(8))
+            .unwrap_or(6);
+
         Self {
             cli_path,
             model_path,
-            threads: 4,
+            threads: num_cpus,
         }
+    }
+
+    /// Khởi tạo engine nhẹ cho Wake Word (ưu tiên ggml-base) để phản hồi tức thì dưới 1 giây
+    pub fn fast_wake_engine() -> Self {
+        let home = dirs::home_dir().unwrap_or_default();
+        let base_dir = std::env::current_dir().unwrap_or_default();
+        let cli_path = home.join(".local/bin/whisper-cli");
+
+        let candidates = [
+            std::env::var("AI_ASSISTANT_WAKE_MODEL").map(PathBuf::from).unwrap_or_default(),
+            base_dir.join("models/whisper/ggml-base.bin"),
+            home.join("Projects/rust/voice-ai/models/whisper/ggml-base.bin"),
+            base_dir.join("models/whisper/ggml-small.bin"),
+            home.join("Projects/rust/voice-ai/models/whisper/ggml-small.bin"),
+        ];
+
+        let model_path = candidates.into_iter().find(|p| p.exists()).unwrap_or_else(|| {
+            base_dir.join("models/whisper/ggml-base.bin")
+        });
+
+        let num_cpus = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).max(4).min(8))
+            .unwrap_or(6);
+
+        Self {
+            cli_path,
+            model_path,
+            threads: num_cpus,
+        }
+    }
+
+    pub fn with_threads(mut self, threads: usize) -> Self {
+        self.threads = threads;
+        self
     }
 
     pub fn with_model_path<P: AsRef<Path>>(mut self, path: P) -> Self {
@@ -63,7 +101,7 @@ impl WhisperEngine {
                 "-t",
                 &self.threads.to_string(),
                 "--prompt",
-                "Alexa, trợ lý ảo giọng nói tiếng Việt",
+                "Alexa, Hey Jarvis, Trợ lý ơi",
             ])
             .output()?;
 

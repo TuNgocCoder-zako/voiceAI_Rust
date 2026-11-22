@@ -20,16 +20,17 @@ impl WakeWordType {
 }
 
 // Regex trên chuỗi đã chuẩn hóa bỏ dấu tiếng Việt (lowercase)
+// Bao quát: Alexa, Alex, A lếch, A léc, A lek, A lếch xa, A lếch sa, A léc xa, A léc sa, Aleksa, Alecxia...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(a\s*lech\s*xa|a\s*lec\s*xa|a\s*lech\s*sa|alexa|alecxa|a-lech-xa|e\s*alexa|hey\s*alexa)\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*le\s*[-_]?\s*(?:xa|sa|ca)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(hey\s*jarvis|jarvis|gia\s*vit|za\s*vit|gia-vit)\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:jarvis|za\s*vit|gia\s*vit|da\s*vit|za-vit|gia-vit))\b").unwrap()
 });
 
 static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\b(tro\s*ly\s*oi|oi\s*tro\s*ly|cho\s*ly\s*oi|tro\s*ly|e\s*tro\s*ly)\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro\s*ly\s*oi|oi\s*tro\s*ly|cho\s*ly\s*oi|cho\s*ly|tro\s*ly))\b").unwrap()
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -155,6 +156,24 @@ mod tests {
         let (ww, cmd) = res.unwrap();
         assert_eq!(ww, WakeWordType::Alexa);
         assert_eq!(cmd, "thời tiết hôm nay thế nào");
+
+        // Các biến thể phát âm khác của Alexa
+        let cases = [
+            ("A lếch", ""),
+            ("A léc sa", ""),
+            ("Alex, mấy giờ rồi", "mấy giờ rồi"),
+            ("A lếch, mở trình duyệt", "mở trình duyệt"),
+            ("Aleksa ơi, pin còn bao nhiêu", "pin còn bao nhiêu"),
+            ("Alo Alexa", ""),
+            ("Ê lếch xa", ""),
+        ];
+        for (input, expected_cmd) in cases {
+            let r = detect_wake_word(input);
+            assert!(r.is_some(), "Không nhận diện được wake word từ '{}'", input);
+            let (w, c) = r.unwrap();
+            assert_eq!(w, WakeWordType::Alexa);
+            assert_eq!(c, expected_cmd, "Sai cmd từ '{}'", input);
+        }
     }
 
     #[test]

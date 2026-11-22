@@ -91,7 +91,9 @@ impl AudioRecorder {
 
             // 4 khung đầu tiên dùng để đo độ ồn nền (Ambient Noise Calibration)
             if i < 4 {
-                ambient_rms_samples.push(rms);
+                if rms < 0.035 {
+                    ambient_rms_samples.push(rms);
+                }
                 preroll_buffer.push_back(chunk);
                 if preroll_buffer.len() > 6 {
                     preroll_buffer.pop_front();
@@ -99,7 +101,9 @@ impl AudioRecorder {
                 continue;
             } else if i == 4 {
                 preroll_buffer.push_back(chunk);
-                vad.calibrate(&ambient_rms_samples);
+                if !ambient_rms_samples.is_empty() {
+                    vad.calibrate(&ambient_rms_samples);
+                }
                 continue;
             }
 
@@ -111,8 +115,8 @@ impl AudioRecorder {
                     preroll_buffer.pop_front();
                 }
 
-                // Nếu người dùng không nói gì trong 3.5 giây thì dừng
-                if i * 100 >= 3500 {
+                // Nếu người dùng không nói gì trong 2.2 giây thì dừng (giúp vòng lặp túc trực nhanh nhạy)
+                if i * 100 >= 2200 {
                     break;
                 }
             } else {
@@ -131,6 +135,7 @@ impl AudioRecorder {
         }
 
         let _ = child.kill();
+        let _ = child.wait();
 
         // Ghép các chunk thành chuỗi âm thanh hoàn chỉnh
         let mut full_samples: Vec<i16> = Vec::new();

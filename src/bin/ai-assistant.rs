@@ -161,8 +161,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Dedicated Hands-Free Wake Word Mode
     if args.wake_word {
+        let wake_whisper = Arc::new(WhisperEngine::fast_wake_engine());
         run_wake_word_loop(
             recorder.clone(),
+            wake_whisper,
             whisper.clone(),
             app_index.clone(),
             model_router.clone(),
@@ -297,7 +299,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn Background Wake Word Listener Task
     let ww_recorder = recorder.clone();
-    let ww_whisper = whisper.clone();
+    let ww_wake_whisper = Arc::new(WhisperEngine::fast_wake_engine());
+    let ww_query_whisper = whisper.clone();
     let ww_app_index = app_index.clone();
     let ww_router = model_router.clone();
     let ww_ollama = ollama.clone();
@@ -307,7 +310,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::spawn(async move {
         run_wake_word_loop(
             ww_recorder,
-            ww_whisper,
+            ww_wake_whisper,
+            ww_query_whisper,
             ww_app_index,
             ww_router,
             ww_ollama,
@@ -369,7 +373,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// Vòng lặp lắng nghe từ khóa Wake Word rảnh tay
 async fn run_wake_word_loop(
     recorder: Arc<AudioRecorder>,
-    whisper: Arc<WhisperEngine>,
+    wake_whisper: Arc<WhisperEngine>,
+    query_whisper: Arc<WhisperEngine>,
     app_index: Arc<HashMap<String, DesktopApp>>,
     model_router: Arc<voice_ai::ai::ModelRouter>,
     ollama: Arc<voice_ai::ai::OllamaClient>,
@@ -380,8 +385,8 @@ async fn run_wake_word_loop(
     println!("🎧 [Hands-Free Wake Word]: Đang túc trực... Hãy nói 'Alexa', 'Trợ lý ơi' hoặc 'Hey Jarvis'.");
 
     loop {
-        // Thu âm các đoạn âm thanh ngắn (tối đa 4 giây)
-        let record_res = recorder.record(4.0, None).map_err(|e| e.to_string());
+        // Thu âm các đoạn âm thanh ngắn (tối đa 3.5 giây)
+        let record_res = recorder.record(3.5, None).map_err(|e| e.to_string());
         match record_res {
             Ok(samples) => {
                 if samples.len() < 3200 { // Dưới 200ms bỏ qua
@@ -390,12 +395,15 @@ async fn run_wake_word_loop(
 
                 let temp_wav = "/tmp/wake_input.wav";
                 if AudioRecorder::save_wav(&samples, temp_wav, 16000).is_ok() {
-                    let transcript_res = whisper.transcribe_wav(temp_wav).map_err(|e| e.to_string());
+                    let transcript_res = wake_whisper.transcribe_wav(temp_wav).map_err(|e| e.to_string());
                     if let Ok(transcript) = transcript_res {
                         let trimmed = transcript.trim();
                         if trimmed.is_empty() {
                             continue;
                         }
+
+                        // Debug log hiển thị trong journalctl để biết mic đã nghe được gì
+                        println!("🎧 [Mic]: \"{}\"", trimmed);
 
                         // Kiểm tra từ khóa Wake Word
                         if let Some((wake_word, cmd)) = detect_wake_word(trimmed) {
@@ -412,7 +420,7 @@ async fn run_wake_word_loop(
                                         }
                                         let followup_wav = "/tmp/voice_input.wav";
                                         if AudioRecorder::save_wav(&followup_samples, followup_wav, 16000).is_ok() {
-                                            let followup_res = whisper.transcribe_wav(followup_wav).map_err(|e| e.to_string());
+                                            let followup_res = query_whisper.transcribe_wav(followup_wav).map_err(|e| e.to_string());
                                             if let Ok(followup_text) = followup_res {
                                                 let q = followup_text.trim();
                                                 if !q.is_empty() {
@@ -453,7 +461,7 @@ async fn run_wake_word_loop(
             }
             Err(err) => {
                 eprintln!("Lỗi ghi âm wake word: {}", err);
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
             }
         }
     }

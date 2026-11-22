@@ -8,9 +8,9 @@ pub struct VadConfig {
 impl Default for VadConfig {
     fn default() -> Self {
         Self {
-            min_speech_ms: 200,
-            min_silence_ms: 1000,
-            max_wait_ms: 3500,
+            min_speech_ms: 150,
+            min_silence_ms: 600,
+            max_wait_ms: 2500,
             sample_rate: 16000,
         }
     }
@@ -29,8 +29,8 @@ impl SchmittTriggerVad {
     pub fn new() -> Self {
         Self {
             ambient_noise: 0.010,
-            speech_trigger_threshold: 0.028,
-            silence_threshold: 0.018,
+            speech_trigger_threshold: 0.022,
+            silence_threshold: 0.015,
             has_spoken: false,
             silence_duration_ms: 0,
             spoken_duration_ms: 0,
@@ -43,15 +43,16 @@ impl SchmittTriggerVad {
             return;
         }
         let avg_rms: f32 = ambient_rms_samples.iter().sum::<f32>() / ambient_rms_samples.len() as f32;
-        self.ambient_noise = avg_rms.max(0.005);
-        self.speech_trigger_threshold = (self.ambient_noise * 1.7)
-            .max(self.ambient_noise + 0.015)
-            .max(0.024)
-            .min(0.065);
-        self.silence_threshold = (self.ambient_noise * 1.25)
-            .max(self.ambient_noise + 0.008)
-            .max(0.016)
-            .min(0.045);
+        // Giới hạn độ ồn môi trường tối đa 0.040 để tiếng ồn nền/loa không làm điếc micro
+        self.ambient_noise = avg_rms.max(0.005).min(0.040);
+        self.speech_trigger_threshold = (self.ambient_noise * 1.4)
+            .max(self.ambient_noise + 0.010)
+            .max(0.022)
+            .min(0.055);
+        self.silence_threshold = (self.ambient_noise * 1.15)
+            .max(self.ambient_noise + 0.005)
+            .max(0.015)
+            .min(0.040);
     }
 
     /// Tính toán RMS năng lượng của khung âm thanh i16 PCM (chuẩn hóa về [-1.0, 1.0])
@@ -83,8 +84,8 @@ impl SchmittTriggerVad {
             self.spoken_duration_ms += chunk_ms;
             if frame_rms <= self.silence_threshold {
                 self.silence_duration_ms += chunk_ms;
-                if self.silence_duration_ms >= 1000 && self.spoken_duration_ms >= 300 {
-                    // Đã phát hiện khoảng lặng tự nhiên kết thúc câu nói
+                if self.silence_duration_ms >= 600 && self.spoken_duration_ms >= 200 {
+                    // Đã phát hiện khoảng lặng tự nhiên kết thúc câu nói (600ms)
                     return (true, true);
                 }
             } else {
