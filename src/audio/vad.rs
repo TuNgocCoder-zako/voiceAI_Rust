@@ -184,3 +184,106 @@ impl Default for SchmittTriggerVad {
         Self::new()
     }
 }
+
+use ort::session::{builder::GraphOptimizationLevel, Session};
+use ort::value::Tensor;
+use std::path::{Path, PathBuf};
+
+/// Silero VAD v5 chạy cục bộ trên CPU qua ONNX Runtime (khung 512 mẫu = 32ms @ 16kHz)
+pub struct SileroVad {
+    session: Session,
+    state: Vec<f32>,    // shape [2, 1, 128] = 256 phần tử
+    context: [f32; 64], // 64 mẫu đệm ngữ cảnh của Silero VAD v5
+}
+
+impl SileroVad {
+    pub const CHUNK_SAMPLES: usize = 512; // 32ms @ 16kHz
+    const CONTEXT_SAMPLES: usize = 64;
+
+    pub fn new<P: AsRef<Path>>(model_path: P) -> Result<Self, Box<dyn std::error::Error>> {
+        let env = crate::audio::get_ort_env()?;
+        let session = Session::builder(env)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(1)?
+            .commit_from_file(model_path)?;
+
+        Ok(Self {
+            session,
+            state: vec![0.0f32; 2 * 128],
+            context: [0.0f32; Self::CONTEXT_SAMPLES],
+        })
+    }
+
+    /// Tự tìm `models/vad/silero_vad.onnx` theo biến môi trường hoặc thư mục dự án
+    pub fn load_default() -> Option<Self> {
+        let home = dirs::home_dir().unwrap_or_default();
+        let cwd = std::env::current_dir().unwrap_or_default();
+
+        let candidates = [
+            std::env::var("AI_ASSISTANT_VAD_MODEL")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
+            cwd.join("models/vad/silero_vad.onnx"),
+            home.join("Projects/rust/voice-ai/models/vad/silero_vad.onnx"),
+            home.join(".local/share/voice-ai/models/vad/silero_vad.onnx"),
+        ];
+
+        let path = candidates.into_iter().find(|p| p.exists())?;
+        match Self::new(&path) {
+            Ok(vad) => {
+                println!("🧠 [Silero VAD v5]: Đã nạp mô hình từ {:?}", path);
+                Some(vad)
+            }
+            Err(e) => {
+                eprintln!("⚠️ Không nạp được Silero VAD ({:?}): {}", path, e);
+                None
+            }
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.state.fill(0.0);
+        self.context.fill(0.0);
+    }
+
+    /// Tính xác suất có tiếng nói [0.0, 1.0] cho đúng 512 mẫu f32 [-1.0, 1.0] @ 16kHz
+    pub fn process_chunk(&mut self, chunk_512: &[f32]) -> Result<f32, Box<dyn std::error::Error>> {
+        if chunk_512.len() != Self::CHUNK_SAMPLES {
+            return Err(format!(
+                "SileroVad yêu cầu {} mẫu, nhận được {}",
+                Self::CHUNK_SAMPLES,
+                chunk_512.len()
+            )
+            .into());
+        }
+
+        // Ghép 64 mẫu ngữ cảnh trước + 512 mẫu hiện tại = 576 mẫu
+        let mut input_buf = Vec::with_capacity(Self::CONTEXT_SAMPLES + Self::CHUNK_SAMPLES);
+        input_buf.extend_from_slice(&self.context);
+        input_buf.extend_from_slice(chunk_512);
+        self.context
+            .copy_from_slice(&chunk_512[Self::CHUNK_SAMPLES - Self::CONTEXT_SAMPLES..]);
+
+        let input_tensor = Tensor::from_array((
+            [1usize, Self::CONTEXT_SAMPLES + Self::CHUNK_SAMPLES],
+            input_buf,
+        ))?;
+        let state_tensor = Tensor::from_array(([2usize, 1, 128], self.state.clone()))?;
+        let sr_tensor = Tensor::from_array((Vec::<i64>::new(), vec![16000i64]))?;
+
+        let outputs = self.session.run(ort::inputs![
+            "input" => input_tensor,
+            "state" => state_tensor,
+            "sr" => sr_tensor
+        ])?;
+
+        let (_, prob_data): (&ort::value::Shape, &[f32]) = outputs[0].try_extract_tensor::<f32>()?;
+        let (_, next_state): (&ort::value::Shape, &[f32]) = outputs[1].try_extract_tensor::<f32>()?;
+
+        if next_state.len() == self.state.len() {
+            self.state.copy_from_slice(next_state);
+        }
+
+        Ok(prob_data.first().copied().unwrap_or(0.0))
+    }
+}

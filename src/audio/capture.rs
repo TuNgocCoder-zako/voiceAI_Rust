@@ -1,4 +1,4 @@
-use crate::audio::vad::{HighPassFilter, SchmittTriggerVad};
+use crate::audio::vad::{HighPassFilter, SchmittTriggerVad, SileroVad};
 use crate::core::state::StateManager;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::traits::{Consumer, Producer, Split};
@@ -446,6 +446,113 @@ impl AudioRecorder {
         }
 
         normalize_audio(&mut full_samples, vad.ambient_noise);
+        Ok(full_samples)
+    }
+
+    /// Thu câu lệnh chính xác bằng Silero VAD v5 (khung 32ms, 450ms pre-roll, chống nhiễu phím cơ).
+    pub fn record_command_with_silero(
+        &self,
+        vad: &mut SileroVad,
+        initial_wait_secs: f32,
+        max_speech_secs: f32,
+        state_mgr: Option<&StateManager>,
+    ) -> Result<Vec<i16>, Box<dyn std::error::Error>> {
+        self.ensure_started()?;
+        vad.reset();
+
+        const SPEECH_START_PROB: f32 = 0.50;
+        const SPEECH_CONT_PROB: f32 = 0.35;
+        const START_MIN_FRAMES: u32 = 2;    // 64ms liên tiếp mới tính là bắt đầu nói
+        const END_SILENCE_FRAMES: u32 = 22; // ~704ms im lặng để chốt kết thúc câu
+        const MIN_SPEECH_FRAMES: u32 = 8;   // ~256ms tiếng nói tối thiểu
+        const PREROLL_FRAMES: usize = 14;   // ~448ms đệm trước để không cắt chữ đầu
+
+        let max_wait_frames = ((initial_wait_secs * 1000.0) / 32.0).round() as u32;
+        let max_speech_frames = ((max_speech_secs * 1000.0) / 32.0).round() as u32;
+
+        let mut preroll: VecDeque<Vec<f32>> = VecDeque::with_capacity(PREROLL_FRAMES + 1);
+        let mut recorded_f32: Vec<f32> = Vec::new();
+
+        let mut waiting_frames: u32 = 0;
+        let mut speech_onset_streak: u32 = 0;
+        let mut has_spoken = false;
+        let mut spoken_frames: u32 = 0;
+        let mut silence_frames: u32 = 0;
+
+        let mut guard = self.stream.lock().unwrap();
+        let stream = guard.as_mut().ok_or("Audio stream chưa khởi tạo")?;
+
+        loop {
+            let mut chunk = vec![0.0f32; SileroVad::CHUNK_SAMPLES];
+            if !stream.read_exact_f32(&mut chunk, state_mgr) {
+                return Ok(Vec::new());
+            }
+
+            let prob = vad.process_chunk(&chunk).unwrap_or(0.0);
+
+            if !has_spoken {
+                preroll.push_back(chunk);
+                if preroll.len() > PREROLL_FRAMES {
+                    preroll.pop_front();
+                }
+
+                if prob >= SPEECH_START_PROB {
+                    speech_onset_streak += 1;
+                    if speech_onset_streak >= START_MIN_FRAMES {
+                        has_spoken = true;
+                        spoken_frames = speech_onset_streak;
+                        silence_frames = 0;
+                        for frame in preroll.drain(..) {
+                            recorded_f32.extend_from_slice(&frame);
+                        }
+                    }
+                } else {
+                    speech_onset_streak = 0;
+                    waiting_frames += 1;
+                    if waiting_frames >= max_wait_frames {
+                        break;
+                    }
+                }
+            } else {
+                recorded_f32.extend_from_slice(&chunk);
+                spoken_frames += 1;
+
+                if prob < SPEECH_CONT_PROB {
+                    silence_frames += 1;
+                    if silence_frames >= END_SILENCE_FRAMES && spoken_frames >= MIN_SPEECH_FRAMES {
+                        break;
+                    }
+                } else {
+                    silence_frames = 0;
+                }
+
+                if spoken_frames >= max_speech_frames {
+                    break;
+                }
+            }
+        }
+
+        drop(guard);
+
+        if !has_spoken || spoken_frames < MIN_SPEECH_FRAMES {
+            return Ok(Vec::new());
+        }
+
+        let mut full_samples: Vec<i16> = recorded_f32
+            .into_iter()
+            .map(|s| (s * 32767.0).clamp(-32768.0, 32767.0) as i16)
+            .collect();
+
+        let max_abs = full_samples
+            .iter()
+            .map(|&s| (s as i32).abs())
+            .max()
+            .unwrap_or(0);
+        if max_abs < 200 {
+            return Ok(Vec::new());
+        }
+
+        normalize_audio(&mut full_samples, 0.015);
         Ok(full_samples)
     }
 

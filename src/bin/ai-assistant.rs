@@ -1,10 +1,12 @@
 use clap::Parser;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc;
-use voice_ai::audio::{detect_wake_word, AudioRecorder, WhisperEngine};
+use voice_ai::audio::{
+    detect_wake_word, AudioRecorder, OpenWakeWordDetector, SileroVad, WhisperEngine,
+};
 use voice_ai::config::Config;
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::core::nlu::router::TIMER_MANAGER;
@@ -13,6 +15,7 @@ use voice_ai::ipc::client::{send_ipc_command, send_ipc_command_with_options};
 use voice_ai::ipc::server::{ActionRequest, IpcServer};
 use voice_ai::speech::{play_chime, ChimeType, PiperTts};
 use voice_ai::tools::apps::{build_app_index, DesktopApp};
+use voice_ai::tools::system::is_media_playing;
 
 #[derive(Parser, Debug)]
 #[command(name = "ai-assistant")]
@@ -55,6 +58,9 @@ struct Args {
 
     #[arg(long, help = "Đọc trực tiếp một đoạn văn bản qua TTS mà không gửi lên LLM")]
     speak: Option<String>,
+
+    #[arg(long, help = "Hiển thị trực tiếp điểm Silero VAD & openWakeWord theo thời gian thực")]
+    debug_audio: bool,
 
     #[arg(long, help = "Chạy đo kiểm hiệu năng Fast-Path NLU siêu tốc")]
     benchmark: bool,
@@ -136,6 +142,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Benchmark Subcommand
     if args.benchmark {
         run_nlu_benchmark(200);
+        return Ok(());
+    }
+
+    if args.debug_audio {
+        run_audio_debugger()?;
         return Ok(());
     }
 
@@ -621,6 +632,7 @@ fn ensure_overlay_running() {
 async fn capture_and_handle_followup(
     source_label: &str,
     recorder: &Arc<AudioRecorder>,
+    mut silero_vad: Option<&mut SileroVad>,
     query_whisper: &Arc<WhisperEngine>,
     app_index: &Arc<HashMap<String, DesktopApp>>,
     model_router: &Arc<voice_ai::ai::ModelRouter>,
@@ -648,9 +660,15 @@ async fn capture_and_handle_followup(
         return;
     }
 
-    let followup_res = recorder
-        .record(8.0, Some(state_manager))
-        .map_err(|e| e.to_string());
+    let followup_res = if let Some(vad) = silero_vad.as_deref_mut() {
+        recorder
+            .record_command_with_silero(vad, 4.5, 10.0, Some(state_manager))
+            .map_err(|e| e.to_string())
+    } else {
+        recorder
+            .record(8.0, Some(state_manager))
+            .map_err(|e| e.to_string())
+    };
 
     match followup_res {
         Ok(followup_samples) => {
@@ -724,12 +742,22 @@ async fn run_wake_word_loop(
     state_manager: StateManager,
     model_override: Option<String>,
 ) {
-    println!("🎧 [Hands-Free Wake Word]: Đang túc trực... Hãy nói 'Alexa', 'Trợ lý ơi' hoặc 'Hey Jarvis'.");
+    let mut silero_vad = SileroVad::load_default();
+    let mut oww_detector = OpenWakeWordDetector::load_default();
+
+    if oww_detector.is_some() {
+        println!("🎧 [Hands-Free ONNX]: openWakeWord + Silero VAD đã sẵn sàng ('Alexa', 'Hey Jarvis').");
+    } else {
+        println!("⚠️ [Fallback]: Chưa có model openWakeWord ONNX trong models/wakeword/, tạm dùng Whisper Wake Word.");
+    }
+
+    let mut oww_pcm_queue: VecDeque<f32> = VecDeque::with_capacity(2048);
+    let mut last_music_check = Instant::now() - std::time::Duration::from_secs(5);
+    let mut cached_music_playing = false;
 
     loop {
         // 1. Ưu tiên xử lý kích hoạt thủ công (--trigger / --relisten)
         if state_manager.has_manual_trigger() {
-            // Chờ TTS cũ dừng hẳn (tối đa ~500ms) trước khi mở mic
             for _ in 0..20 {
                 if !tts.is_speaking() {
                     break;
@@ -742,6 +770,7 @@ async fn run_wake_word_loop(
             capture_and_handle_followup(
                 "Manual Trigger",
                 &recorder,
+                silero_vad.as_mut(),
                 &query_whisper,
                 &app_index,
                 &model_router,
@@ -753,11 +782,16 @@ async fn run_wake_word_loop(
             )
             .await;
 
-            tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
+            if let Some(det) = oww_detector.as_mut() {
+                det.reset();
+            }
+            oww_pcm_queue.clear();
+            recorder.flush();
+            tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
             continue;
         }
 
-        // 2. Nếu vừa nhận lệnh --stop: chờ TTS dứt rồi khôi phục cờ để tiếp tục chờ wake word
+        // 2. Xử lý tín hiệu --stop
         if state_manager.is_interrupted() {
             if tts.is_speaking() {
                 tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
@@ -767,53 +801,114 @@ async fn run_wake_word_loop(
             if !state_manager.has_manual_trigger() {
                 state_manager.reset_interrupt();
             }
-            continue;
-        }
-
-        // 3. Tạm dừng thu wake word khi hệ thống đang bận (Thinking / Speaking từ IPC hoặc Timer)
-        if tts.is_speaking() || state_manager.get_state_sync() != AssistantState::Idle {
-            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+            if let Some(det) = oww_detector.as_mut() {
+                det.reset();
+            }
+            oww_pcm_queue.clear();
             recorder.flush();
             continue;
         }
 
-        // 4. Thu âm các đoạn ngắn (tối đa 3.5 giây), có thể bị ngắt ngay bởi --trigger / --stop
+        // 3. Tạm nghỉ khi hệ thống đang bận xử lý / phát TTS
+        if tts.is_speaking() || state_manager.get_state_sync() != AssistantState::Idle {
+            tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+            if let Some(det) = oww_detector.as_mut() {
+                det.reset();
+            }
+            oww_pcm_queue.clear();
+            recorder.flush();
+            continue;
+        }
+
+        // 4A. NHÁNH CHÍNH: openWakeWord ONNX thời gian thực (80ms/khung, không chạy Whisper khi chờ)
+        if let Some(detector) = oww_detector.as_mut() {
+            if last_music_check.elapsed() >= std::time::Duration::from_secs(2) {
+                cached_music_playing = is_media_playing();
+                last_music_check = Instant::now();
+            }
+
+            let mut frame_512 = [0.0f32; SileroVad::CHUNK_SAMPLES];
+            match recorder.read_frame_f32(&mut frame_512, Some(&state_manager)) {
+                Ok(true) => {
+                    oww_pcm_queue.extend(frame_512.iter().copied());
+                    while oww_pcm_queue.len() >= OpenWakeWordDetector::FRAME_SAMPLES {
+                        let frame_1280: Vec<f32> = oww_pcm_queue
+                            .drain(..OpenWakeWordDetector::FRAME_SAMPLES)
+                            .collect();
+
+                        match detector.process_frame(&frame_1280, cached_music_playing) {
+                            Ok(res) => {
+                                if let Some((ww_type, score)) = res.detected {
+                                    println!(
+                                        "\n✨ [openWakeWord: {}] Độ khớp: {:.2} (Ngưỡng: {:.2}{})",
+                                        ww_type.name(),
+                                        score,
+                                        res.active_threshold,
+                                        if cached_music_playing { " 🎵" } else { "" }
+                                    );
+
+                                    capture_and_handle_followup(
+                                        &format!("Wake Word: {}", ww_type.name()),
+                                        &recorder,
+                                        silero_vad.as_mut(),
+                                        &query_whisper,
+                                        &app_index,
+                                        &model_router,
+                                        &ollama,
+                                        &config,
+                                        &tts,
+                                        &state_manager,
+                                        model_override.as_deref(),
+                                    )
+                                    .await;
+
+                                    detector.reset();
+                                    oww_pcm_queue.clear();
+                                    recorder.flush();
+                                    tokio::time::sleep(tokio::time::Duration::from_millis(500))
+                                        .await;
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("⚠️ Lỗi suy luận openWakeWord: {}", e);
+                            }
+                        }
+                    }
+                }
+                Ok(false) => continue, // Bị ngắt bởi --trigger / --stop
+                Err(e) => {
+                    eprintln!("Lỗi đọc luồng audio cpal: {}", e);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+                }
+            }
+            continue;
+        }
+
+        // 4B. NHÁNH DỰ PHÒNG (khi máy chưa tải tệp .onnx): dùng lại vòng lặp Whisper cũ
         let record_res = recorder
             .record(3.5, Some(&state_manager))
             .map_err(|e| e.to_string());
-
-        match record_res {
-            Ok(samples) => {
-                // Nếu bị ngắt giữa chừng (do --trigger/--stop) hoặc hệ thống chuyển bận, quay lại đầu vòng lặp
-                if state_manager.has_manual_trigger()
-                    || state_manager.is_interrupted()
-                    || state_manager.get_state_sync() != AssistantState::Idle
-                {
-                    continue;
-                }
-
-                if samples.len() < 3200 {
-                    continue;
-                }
-
-                let temp_wav = "/tmp/wake_input.wav";
-                if AudioRecorder::save_wav(&samples, temp_wav, 16000).is_ok() {
-                    let transcript_res = wake_whisper
-                        .transcribe_wav(temp_wav)
-                        .map_err(|e| e.to_string());
-                    if let Ok(transcript) = transcript_res {
-                        let trimmed = transcript.trim();
-                        if trimmed.is_empty() {
-                            continue;
-                        }
-
+        if let Ok(samples) = record_res {
+            if state_manager.has_manual_trigger()
+                || state_manager.is_interrupted()
+                || state_manager.get_state_sync() != AssistantState::Idle
+                || samples.len() < 3200
+            {
+                continue;
+            }
+            let temp_wav = "/tmp/wake_input.wav";
+            if AudioRecorder::save_wav(&samples, temp_wav, 16000).is_ok() {
+                if let Ok(transcript) = wake_whisper.transcribe_wav(temp_wav) {
+                    let trimmed = transcript.trim();
+                    if !trimmed.is_empty() {
                         println!("🎧 [Mic]: \"{}\"", trimmed);
-
                         if let Some((wake_word, cmd)) = detect_wake_word(trimmed) {
                             if cmd.is_empty() {
                                 capture_and_handle_followup(
                                     &format!("Wake Word: {}", wake_word.name()),
                                     &recorder,
+                                    silero_vad.as_mut(),
                                     &query_whisper,
                                     &app_index,
                                     &model_router,
@@ -826,11 +921,6 @@ async fn run_wake_word_loop(
                                 .await;
                             } else {
                                 play_chime(ChimeType::Wake);
-                                println!(
-                                    "\n🔔 [Wake Word: {}] Câu lệnh tức thì: \"{}\"",
-                                    wake_word.name(),
-                                    cmd
-                                );
                                 state_manager
                                     .set_state_full(
                                         AssistantState::Thinking,
@@ -850,16 +940,10 @@ async fn run_wake_word_loop(
                                 )
                                 .await;
                             }
-
-                            // Nghỉ 800ms sau khi trả lời để âm loa tắt vang phòng
                             tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
                         }
                     }
                 }
-            }
-            Err(err) => {
-                eprintln!("Lỗi ghi âm wake word: {}", err);
-                tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
             }
         }
     }
@@ -1166,4 +1250,70 @@ fn ensure_mic_levels() {
     let _ = std::process::Command::new("amixer")
         .args(["-c", &card, "sset", "Capture", "75%"])
         .output();
+}
+
+fn run_audio_debugger() -> Result<(), Box<dyn std::error::Error>> {
+    let recorder = AudioRecorder::new();
+    let mut vad = SileroVad::load_default()
+        .ok_or("Chưa thấy models/vad/silero_vad.onnx")?;
+    let mut oww = OpenWakeWordDetector::load_default()
+        .ok_or("Chưa thấy thư mục models/wakeword/")?;
+
+    println!("🔬 Chế độ kiểm tra âm thanh trực tiếp (Ctrl+C để thoát)...");
+    println!("   Thử gõ phím, mở nhạc và gọi 'Alexa' / 'Hey Jarvis' để quan sát chỉ số.\n");
+
+    let mut oww_queue: VecDeque<f32> = VecDeque::with_capacity(2048);
+    let mut last_music_check = Instant::now() - std::time::Duration::from_secs(5);
+    let mut music_playing = false;
+
+    loop {
+        if last_music_check.elapsed() >= std::time::Duration::from_secs(2) {
+            music_playing = is_media_playing();
+            last_music_check = Instant::now();
+        }
+
+        let mut frame = [0.0f32; SileroVad::CHUNK_SAMPLES];
+        if !recorder.read_frame_f32(&mut frame, None)? {
+            break;
+        }
+
+        let vad_prob = vad.process_chunk(&frame)?;
+        oww_queue.extend(frame.iter().copied());
+
+        if oww_queue.len() >= OpenWakeWordDetector::FRAME_SAMPLES {
+            let chunk_1280: Vec<f32> = oww_queue
+                .drain(..OpenWakeWordDetector::FRAME_SAMPLES)
+                .collect();
+            let res = oww.process_frame(&chunk_1280, music_playing)?;
+
+            let score_str = res
+                .scores
+                .iter()
+                .map(|(t, s)| format!("{}: {:.2}", t.name(), s))
+                .collect::<Vec<_>>()
+                .join(" | ");
+
+            let bar_len = (vad_prob * 10.0).round() as usize;
+            let bar = format!(
+                "{}{}",
+                "█".repeat(bar_len.min(10)),
+                "░".repeat(10usize.saturating_sub(bar_len))
+            );
+
+            print!(
+                "\r🎙️ VAD: [{}] {:.2} | {} (Ngưỡng: {:.2}{})   ",
+                bar,
+                vad_prob,
+                if score_str.is_empty() { "warmup..." } else { &score_str },
+                res.active_threshold,
+                if music_playing { " 🎵" } else { "" }
+            );
+            let _ = io::stdout().flush();
+
+            if let Some((ww, sc)) = res.detected {
+                println!("\n🔔 PHÁT HIỆN WAKE WORD: {} (score = {:.2})!", ww.name(), sc);
+            }
+        }
+    }
+    Ok(())
 }
