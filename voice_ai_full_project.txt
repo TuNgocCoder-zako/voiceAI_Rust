@@ -3446,27 +3446,23 @@ FILE: systemd/voice-ai.service
 ================================================================================
 [Unit]
 Description=Voice AI Assistant Daemon (Rust Native)
-Documentation=https://github.com/TuNgocCoder-zako/ai-assistant
-After=pipewire.service pipewire-pulse.service
+Documentation=https://github.com/TuNgocCoder-zako/voiceAI_Rust
+After=graphical-session.target pipewire.service pipewire-pulse.service
 Wants=pipewire.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/ngoctu/Projects/rust/voice-ai
-ExecStart=/home/ngoctu/.local/bin/ai-assistant-rs
+WorkingDirectory=%h/Projects/rust/voice-ai
+ExecStart=%h/.local/bin/ai-assistant-rs
 Restart=always
 RestartSec=3
-Environment=PATH=/home/ngoctu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-Environment=WAYLAND_DISPLAY=wayland-0
-Environment=DISPLAY=:0
-Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME
-Environment=QT_QPA_PLATFORM=xcb
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target
 
 
 ================================================================================
@@ -4062,7 +4058,13 @@ ShellRoot {
 
     function copyToClipboard(text) {
         if (!text || text.length === 0) return;
-        cmdRunner.commandList = ["/usr/bin/wl-copy", "--", text];
+        if (cmdRunner.running) cmdRunner.running = false;
+        cmdRunner.commandList = [
+            "/bin/sh", "-c",
+            "if command -v wl-copy >/dev/null 2>&1; then printf '%s' \"$1\" | wl-copy; elif command -v xclip >/dev/null 2>&1; then printf '%s' \"$1\" | xclip -selection clipboard; fi",
+            "--",
+            text
+        ];
         cmdRunner.running = true;
         showToast("📋 Đã sao chép vào bộ nhớ tạm!");
     }
@@ -4074,8 +4076,8 @@ ShellRoot {
             cmdRunner.running = true;
             showToast("🔇 Đã dừng đọc");
         } else {
-            let toSpeak = root.longAnswerText.substring(0, 300);
-            cmdRunner.commandList = [root.assistantBin, "--query", toSpeak];
+            let toSpeak = root.longAnswerText.substring(0, 1200);
+            cmdRunner.commandList = [root.assistantBin, "--speak", toSpeak];
             cmdRunner.running = true;
             showToast("🔊 Đang đọc phản hồi...");
         }
@@ -4101,6 +4103,9 @@ ShellRoot {
         root.isCardDismissed = false;
 
         let args = [root.assistantBin, "--query", query];
+        if (deep) {
+            args.push("--deep");
+        }
         if (cmdRunner.running) {
             cmdRunner.running = false;
         }
@@ -4109,9 +4114,12 @@ ShellRoot {
     }
 
     function takeScreenshot() {
-        showToast("📸 Đã chụp màn hình!");
+        showToast("📸 Đang mở chụp màn hình...");
         if (cmdRunner.running) cmdRunner.running = false;
-        cmdRunner.commandList = ["/usr/bin/grim"];
+        cmdRunner.commandList = [
+            "/bin/sh", "-c",
+            "if [ -n \"$HYPRLAND_INSTANCE_SIGNATURE\" ] && command -v grim >/dev/null 2>&1; then grim; elif command -v gnome-screenshot >/dev/null 2>&1; then gnome-screenshot -a; else gdbus call --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Screenshot.Screenshot '' \"{'interactive': <true>}\"; fi"
+        ];
         cmdRunner.running = true;
     }
 
@@ -6829,6 +6837,7 @@ pub struct StateManager {
     current_state: Arc<AtomicU8>,
     broadcaster: broadcast::Sender<StateEvent>,
     is_interrupted: Arc<AtomicBool>,
+    manual_trigger: Arc<AtomicBool>,
 }
 
 impl StateManager {
@@ -6838,6 +6847,7 @@ impl StateManager {
             current_state: Arc::new(AtomicU8::new(AssistantState::Idle as u8)),
             broadcaster: tx,
             is_interrupted: Arc::new(AtomicBool::new(false)),
+            manual_trigger: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -6904,6 +6914,26 @@ impl StateManager {
 
     pub fn is_interrupted(&self) -> bool {
         self.is_interrupted.load(Ordering::SeqCst)
+    }
+
+    /// Đánh thức luồng thu âm ngay lập tức (dùng cho --trigger và --relisten)
+    pub fn trigger_listen(&self) {
+        self.manual_trigger.store(true, Ordering::SeqCst);
+        self.is_interrupted.store(true, Ordering::SeqCst);
+    }
+
+    /// Dừng mọi tác vụ đang nói / đang thu mà không mở lại mic
+    pub fn stop_all(&self) {
+        self.manual_trigger.store(false, Ordering::SeqCst);
+        self.is_interrupted.store(true, Ordering::SeqCst);
+    }
+
+    pub fn has_manual_trigger(&self) -> bool {
+        self.manual_trigger.load(Ordering::SeqCst)
+    }
+
+    pub fn take_manual_trigger(&self) -> bool {
+        self.manual_trigger.swap(false, Ordering::SeqCst)
     }
 }
 
@@ -9332,8 +9362,9 @@ use tokio::sync::mpsc;
 use voice_ai::audio::{detect_wake_word, AudioRecorder, WhisperEngine};
 use voice_ai::config::Config;
 use voice_ai::core::nlu::fast_path_nlu;
+use voice_ai::core::nlu::router::TIMER_MANAGER;
 use voice_ai::core::state::{AssistantState, StateManager};
-use voice_ai::ipc::client::send_ipc_command;
+use voice_ai::ipc::client::{send_ipc_command, send_ipc_command_with_options};
 use voice_ai::ipc::server::{ActionRequest, IpcServer};
 use voice_ai::speech::{play_chime, ChimeType, PiperTts};
 use voice_ai::tools::apps::{build_app_index, DesktopApp};
@@ -9359,6 +9390,9 @@ struct Args {
     #[arg(short = 'm', long, help = "Chỉ định thủ công mô hình LLM (Bỏ qua tự động định tuyến)")]
     model: Option<String>,
 
+    #[arg(long, help = "Ép dùng mô hình suy luận sâu (Reasoning) khi dùng --query")]
+    deep: bool,
+
     #[arg(long, help = "Gửi tín hiệu đánh thức tới trợ lý đang chạy nền")]
     trigger: bool,
 
@@ -9373,6 +9407,9 @@ struct Args {
 
     #[arg(long, help = "Chạy câu lệnh đơn lẻ rồi thoát ngay")]
     query: Option<String>,
+
+    #[arg(long, help = "Đọc trực tiếp một đoạn văn bản qua TTS mà không gửi lên LLM")]
+    speak: Option<String>,
 
     #[arg(long, help = "Chạy đo kiểm hiệu năng Fast-Path NLU siêu tốc")]
     benchmark: bool,
@@ -9415,7 +9452,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.status {
         match send_ipc_command(&config.socket_path, "status", None).await {
             Ok(resp) => {
-                println!("✅ Trợ lý AI đang chạy nền! Trạng thái: {:?}", resp.state.unwrap_or_default());
+                println!(
+                    "✅ Trợ lý AI đang chạy nền! Trạng thái: {:?}",
+                    resp.state.unwrap_or_default()
+                );
             }
             Err(e) => {
                 println!("⚠️ Không kết nối được tới trợ lý đang chạy nền: {}", e);
@@ -9454,36 +9494,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let app_index = Arc::new(build_app_index());
     let tts = Arc::new(PiperTts::new());
+
+    // 2.5. Direct TTS Speak Subcommand (dùng cho nút loa trên Overlay)
+    if let Some(text) = args.speak {
+        if config.socket_path.exists() {
+            if send_ipc_command(&config.socket_path, "speak", Some(text.clone()))
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+        }
+        if tts.is_available() {
+            let tts_c = tts.clone();
+            let _ = tokio::task::spawn_blocking(move || tts_c.speak(&text, None)).await;
+        }
+        return Ok(());
+    }
+
+    let app_index = Arc::new(build_app_index());
     let recorder = Arc::new(AudioRecorder::new());
     let whisper = Arc::new(WhisperEngine::new());
-    let ollama = Arc::new(voice_ai::ai::OllamaClient::new(&config.ollama_url, &config.model));
+    let ollama = Arc::new(voice_ai::ai::OllamaClient::new(
+        &config.ollama_url,
+        &config.model,
+    ));
     let model_router = Arc::new(voice_ai::ai::ModelRouter::new(&config.ollama_url));
 
-    // 3. Single Query Execution
+    // 3. Single Query Execution (đã vá lỗi Double Execution)
     if let Some(q) = args.query {
         if config.socket_path.exists() {
-            if let Ok(_resp) = send_ipc_command(&config.socket_path, "query", Some(q.clone())).await {
+            if send_ipc_command_with_options(
+                &config.socket_path,
+                "query",
+                Some(q.clone()),
+                Some(args.deep),
+            )
+            .await
+            .is_ok()
+            {
                 println!("📨 Đã gửi câu lệnh tới Trợ lý AI đang chạy nền: \"{}\"", q);
-                let (handled, reply) = fast_path_nlu(&q, &app_index, false);
-                if handled {
-                    println!("🤖 [Fast-Path]: {}", reply);
-                }
                 return Ok(());
             }
         }
 
-        let (handled, reply) = fast_path_nlu(&q, &app_index, false);
+        let (handled, reply) = if args.deep {
+            (false, String::new())
+        } else {
+            fast_path_nlu(&q, &app_index, false)
+        };
+
         if handled {
             println!("🤖 [Fast-Path]: {}", reply);
             if args.voice && tts.is_available() {
-                tts.speak(&reply, None);
+                let tts_c = tts.clone();
+                let rep_c = reply.clone();
+                let _ = tokio::task::spawn_blocking(move || tts_c.speak(&rep_c, None)).await;
             }
         } else {
             execute_llm_query(
                 &q,
                 args.model.as_deref(),
+                args.deep,
                 &model_router,
                 &ollama,
                 &config,
@@ -9500,6 +9573,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.wake_word {
         let wake_whisper = Arc::new(WhisperEngine::fast_wake_engine());
         let state_manager = StateManager::new();
+        TIMER_MANAGER.spawn_watcher(tts.clone(), state_manager.clone());
         ensure_overlay_running();
         run_wake_word_loop(
             recorder.clone(),
@@ -9524,10 +9598,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         loop {
             play_chime(ChimeType::Wake);
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
             println!("\n🔴 Đang nghe...");
             match recorder.record(8.0, None) {
                 Ok(samples) => {
-                    if samples.len() < 3200 { // Dưới 200ms
+                    if samples.len() < 3200 {
                         continue;
                     }
                     let temp_wav = "/tmp/voice_input.wav";
@@ -9547,7 +9622,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     let bye = "Tạm biệt bạn nhé! Hẹn gặp lại bạn sau.";
                                     println!("🤖 Trợ lý: {}", bye);
                                     if tts.is_available() {
-                                        tts.speak(bye, None);
+                                        let tts_c = tts.clone();
+                                        let _ = tokio::task::spawn_blocking(move || {
+                                            tts_c.speak(bye, None)
+                                        })
+                                        .await;
                                     }
                                     break;
                                 }
@@ -9604,14 +9683,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let elapsed = start.elapsed();
 
             if handled {
-                println!("🤖 Trợ lý ({:.2} µs): {}", elapsed.as_secs_f64() * 1_000_000.0, reply);
+                println!(
+                    "🤖 Trợ lý ({:.2} µs): {}",
+                    elapsed.as_secs_f64() * 1_000_000.0,
+                    reply
+                );
                 if args.voice && tts.is_available() {
-                    tts.speak(&reply, None);
+                    let tts_c = tts.clone();
+                    let rep_c = reply.clone();
+                    let _ = tokio::task::spawn_blocking(move || tts_c.speak(&rep_c, None)).await;
                 }
             } else {
                 execute_llm_query(
                     trimmed,
                     args.model.as_deref(),
+                    args.deep,
                     &model_router,
                     &ollama,
                     &config,
@@ -9625,12 +9711,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    // 7. Default: Run Daemon & IPC Server with Integrated Hands-Free Wake Word!
+    // 7. Default: Run Daemon & IPC Server with Integrated Hands-Free Wake Word + Timer Watcher
     println!("🌟 Khởi chạy Voice AI Assistant Daemon (Rust Core v2.5.0)...");
     ensure_mic_levels();
     println!("🎧 Đang túc trực lắng nghe từ khóa: 'Alexa', 'Trợ lý ơi', 'Hey Jarvis'...");
     let state_manager = StateManager::new();
     let (action_tx, mut action_rx) = mpsc::channel::<ActionRequest>(64);
+
+    // Kích hoạt luồng đếm ngược Hẹn giờ / Báo thức chạy nền
+    TIMER_MANAGER.spawn_watcher(tts.clone(), state_manager.clone());
 
     let server = IpcServer::new(&config.socket_path, state_manager.clone(), action_tx);
 
@@ -9643,7 +9732,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Giám sát và tự động duy trì giao diện Dynamic Island Overlay luôn chạy
     tokio::spawn(async {
         loop {
-            ensure_overlay_running();
+            let _ = tokio::task::spawn_blocking(ensure_overlay_running).await;
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
         }
     });
@@ -9686,24 +9775,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     while let Some(action) = action_rx.recv().await {
         match action {
             ActionRequest::Trigger => {
-                println!("🔔 Nhận sự kiện Trigger: Đang lắng nghe...");
-                state_manager.set_state(AssistantState::Listening, None).await;
-                play_chime(ChimeType::Wake);
+                // state_manager.trigger_listen() đã được bật từ IPC Server -> wake-word-worker sẽ tự mở mic
+                println!("🔔 Nhận sự kiện Trigger: Đang kích hoạt micro lắng nghe...");
             }
             ActionRequest::Stop => {
                 println!("⏹️ Nhận sự kiện Stop: Đã dừng.");
-                state_manager.interrupt();
+                state_manager.stop_all();
                 state_manager.set_state(AssistantState::Idle, None).await;
             }
             ActionRequest::Relisten => {
-                println!("🔄 Nhận sự kiện Relisten: Lắng nghe lượt mới...");
-                state_manager.interrupt();
-                state_manager.reset_interrupt();
-                state_manager.set_state(AssistantState::Listening, None).await;
-                play_chime(ChimeType::Wake);
+                println!("🔄 Nhận sự kiện Relisten: Dừng tác vụ cũ và mở mic nghe lượt mới...");
             }
-            ActionRequest::Query(text) => {
+            ActionRequest::Speak(text) => {
+                // Ngắt âm cũ nếu đang đọc
+                if tts.is_speaking() {
+                    state_manager.stop_all();
+                    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                }
                 state_manager.reset_interrupt();
+
+                let state_mgr = state_manager.clone();
+                let tts_clone = tts.clone();
+                tokio::spawn(async move {
+                    state_mgr
+                        .set_state_full(AssistantState::Speaking, Some(text.clone()), None)
+                        .await;
+                    if tts_clone.is_available() {
+                        let tts_bg = tts_clone.clone();
+                        let mgr_bg = state_mgr.clone();
+                        let txt_bg = text.clone();
+                        let _ = tokio::task::spawn_blocking(move || {
+                            tts_bg.speak(&txt_bg, Some(&mgr_bg));
+                        })
+                        .await;
+                    }
+                    if !state_mgr.has_manual_trigger() {
+                        state_mgr.set_state(AssistantState::Idle, None).await;
+                    }
+                });
+            }
+            ActionRequest::Query { text, deep } => {
+                // Nếu đang nói hoặc đang thu, ngắt sạch trước khi xử lý truy vấn mới
+                if tts.is_speaking() {
+                    state_manager.stop_all();
+                    tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                }
+                state_manager.reset_interrupt();
+
                 let state_mgr = state_manager.clone();
                 let app_idx = app_index.clone();
                 let tts_clone = tts.clone();
@@ -9712,23 +9830,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let cfg_clone = config.clone();
 
                 tokio::spawn(async move {
-                    state_mgr.set_state(AssistantState::Thinking, None).await;
-                    let (handled, rep) = fast_path_nlu(&text, &app_idx, false);
+                    state_mgr
+                        .set_state_full(
+                            AssistantState::Thinking,
+                            Some("Đang xử lý...".to_string()),
+                            Some(text.clone()),
+                        )
+                        .await;
+
+                    let (handled, rep) = if deep {
+                        (false, String::new())
+                    } else {
+                        let q_bg = text.clone();
+                        let app_bg = app_idx.clone();
+                        tokio::task::spawn_blocking(move || fast_path_nlu(&q_bg, &app_bg, false))
+                            .await
+                            .unwrap_or((false, String::new()))
+                    };
+
                     if handled {
                         println!("🤖 [Fast-Path]: {}", rep);
-                        state_mgr.set_state_full(
-                            AssistantState::Speaking,
-                            Some(rep.clone()),
-                            Some(text.clone()),
-                        ).await;
+                        state_mgr
+                            .set_state_full(
+                                AssistantState::Speaking,
+                                Some(rep.clone()),
+                                Some(text.clone()),
+                            )
+                            .await;
 
-                        if tts_clone.is_available() {
-                            tts_clone.speak(&rep, Some(&state_mgr));
+                        if tts_clone.is_available() && !rep.is_empty() {
+                            let tts_bg = tts_clone.clone();
+                            let mgr_bg = state_mgr.clone();
+                            let rep_bg = rep.clone();
+                            let _ = tokio::task::spawn_blocking(move || {
+                                tts_bg.speak(&rep_bg, Some(&mgr_bg));
+                            })
+                            .await;
+                        }
+                        if !state_mgr.has_manual_trigger() {
+                            state_mgr.set_state(AssistantState::Idle, None).await;
                         }
                     } else {
                         execute_llm_query(
                             &text,
                             None,
+                            deep,
                             &router_clone,
                             &ollama_clone,
                             &cfg_clone,
@@ -9738,7 +9884,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         )
                         .await;
                     }
-                    state_mgr.set_state(AssistantState::Idle, None).await;
                 });
             }
         }
@@ -9748,7 +9893,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn ensure_overlay_running() {
-    // 1. Kiểm tra xem giao diện QML Quickshell gốc (VoiceOverlay.qml) đã chạy chưa
     let qml_check = std::process::Command::new("pgrep")
         .args(["-f", "VoiceOverlay.qml"])
         .output();
@@ -9761,7 +9905,9 @@ fn ensure_overlay_running() {
     let home = dirs::home_dir().unwrap_or_default();
     let qml_candidates = [
         home.join("Projects/rust/voice-ai/overlay/VoiceOverlay.qml"),
-        std::env::current_dir().unwrap_or_default().join("overlay/VoiceOverlay.qml"),
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("overlay/VoiceOverlay.qml"),
         home.join(".config/voice-ai/overlay/VoiceOverlay.qml"),
     ];
 
@@ -9777,7 +9923,6 @@ fn ensure_overlay_running() {
         let mut cmd = std::process::Command::new(qs);
         cmd.args(["-p", qml_path.to_str().unwrap_or_default()]);
 
-        // Trên Ubuntu GNOME Wayland, khởi chạy qua XCB (XWayland) để tạo cửa sổ ARGB 32-bit Dock luôn nổi
         let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
             .unwrap_or_default()
             .to_lowercase()
@@ -9795,14 +9940,16 @@ fn ensure_overlay_running() {
             .spawn()
         {
             Ok(_) => {
-                println!("🖥️ Đã khởi chạy giao diện Quickshell Dynamic Island Overlay: {:?}", qml_path);
+                println!(
+                    "🖥️ Đã khởi chạy giao diện Quickshell Dynamic Island Overlay: {:?}",
+                    qml_path
+                );
                 return;
             }
             Err(e) => eprintln!("⚠️ Lỗi khởi chạy Quickshell overlay: {}", e),
         }
     }
 
-    // Dự phòng (fallback) nếu Quickshell chưa được cài
     let check = std::process::Command::new("pgrep")
         .args(["-x", "voice-overlay"])
         .output();
@@ -9810,7 +9957,9 @@ fn ensure_overlay_running() {
         if !out.status.success() {
             let candidates = [
                 home.join(".local/bin/voice-overlay"),
-                std::env::current_dir().unwrap_or_default().join("target/release/voice-overlay"),
+                std::env::current_dir()
+                    .unwrap_or_default()
+                    .join("target/release/voice-overlay"),
                 home.join("Projects/rust/voice-ai/target/release/voice-overlay"),
             ];
             if let Some(bin) = candidates.iter().find(|p| p.exists()) {
@@ -9823,7 +9972,100 @@ fn ensure_overlay_running() {
     }
 }
 
-/// Vòng lặp lắng nghe từ khóa Wake Word rảnh tay
+/// Thu câu lệnh chính sau khi Wake Word hoặc phím tắt Trigger kích hoạt
+async fn capture_and_handle_followup(
+    source_label: &str,
+    recorder: &Arc<AudioRecorder>,
+    query_whisper: &Arc<WhisperEngine>,
+    app_index: &Arc<HashMap<String, DesktopApp>>,
+    model_router: &Arc<voice_ai::ai::ModelRouter>,
+    ollama: &Arc<voice_ai::ai::OllamaClient>,
+    config: &Config,
+    tts: &Arc<PiperTts>,
+    state_manager: &StateManager,
+    model_override: Option<&str>,
+) {
+    println!("\n🔔 [{}] Đang lắng nghe câu lệnh tiếp theo...", source_label);
+    state_manager
+        .set_state_full(
+            AssistantState::Listening,
+            Some("Đang lắng nghe...".to_string()),
+            None,
+        )
+        .await;
+
+    play_chime(ChimeType::Wake);
+    // Chờ tiếng chime dứt hẳn để mic không thu lại tiếng loa
+    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+
+    if state_manager.is_interrupted() {
+        return;
+    }
+
+    let followup_res = recorder
+        .record(8.0, Some(state_manager))
+        .map_err(|e| e.to_string());
+
+    match followup_res {
+        Ok(followup_samples) => {
+            if state_manager.is_interrupted() || followup_samples.len() < 3200 {
+                if !state_manager.has_manual_trigger() {
+                    state_manager.set_state(AssistantState::Idle, None).await;
+                }
+                return;
+            }
+            let followup_wav = "/tmp/voice_input.wav";
+            if AudioRecorder::save_wav(&followup_samples, followup_wav, 16000).is_ok() {
+                state_manager
+                    .set_state_full(
+                        AssistantState::Thinking,
+                        Some("Đang nhận diện giọng nói...".to_string()),
+                        None,
+                    )
+                    .await;
+                let stt_res = query_whisper
+                    .transcribe_wav(followup_wav)
+                    .map_err(|e| e.to_string());
+                if let Ok(followup_text) = stt_res {
+                    let q = followup_text.trim();
+                    if !q.is_empty() {
+                        println!("👤 Bạn: \"{}\"", q);
+                        state_manager
+                            .set_state_full(
+                                AssistantState::Thinking,
+                                Some("Đang xử lý...".to_string()),
+                                Some(q.to_string()),
+                            )
+                            .await;
+                        execute_voice_command(
+                            q,
+                            app_index,
+                            model_override,
+                            model_router,
+                            ollama,
+                            config,
+                            tts,
+                            Some(state_manager),
+                        )
+                        .await;
+                        return;
+                    }
+                }
+            }
+            if !state_manager.has_manual_trigger() {
+                state_manager.set_state(AssistantState::Idle, None).await;
+            }
+        }
+        Err(err) => {
+            eprintln!("Lỗi thu âm tiếp nối: {}", err);
+            if !state_manager.has_manual_trigger() {
+                state_manager.set_state(AssistantState::Idle, None).await;
+            }
+        }
+    }
+}
+
+/// Vòng lặp lắng nghe từ khóa Wake Word rảnh tay + xử lý Trigger / Relisten tức thì
 async fn run_wake_word_loop(
     recorder: Arc<AudioRecorder>,
     wake_whisper: Arc<WhisperEngine>,
@@ -9839,106 +10081,116 @@ async fn run_wake_word_loop(
     println!("🎧 [Hands-Free Wake Word]: Đang túc trực... Hãy nói 'Alexa', 'Trợ lý ơi' hoặc 'Hey Jarvis'.");
 
     loop {
-        // Tạm dừng thu âm nếu TTS đang phát ra loa để chống tự kích hoạt (Acoustic Echo Loop)
-        if tts.is_speaking() {
-            tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
+        // 1. Ưu tiên xử lý kích hoạt thủ công (--trigger / --relisten)
+        if state_manager.has_manual_trigger() {
+            // Chờ TTS cũ dừng hẳn (tối đa ~500ms) trước khi mở mic
+            for _ in 0..20 {
+                if !tts.is_speaking() {
+                    break;
+                }
+                tokio::time::sleep(tokio::time::Duration::from_millis(25)).await;
+            }
+            state_manager.take_manual_trigger();
+            state_manager.reset_interrupt();
+
+            capture_and_handle_followup(
+                "Manual Trigger",
+                &recorder,
+                &query_whisper,
+                &app_index,
+                &model_router,
+                &ollama,
+                &config,
+                &tts,
+                &state_manager,
+                model_override.as_deref(),
+            )
+            .await;
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
             continue;
         }
 
-        // Thu âm các đoạn âm thanh ngắn (tối đa 3.5 giây)
-        let record_res = recorder.record(3.5, None).map_err(|e| e.to_string());
+        // 2. Nếu vừa nhận lệnh --stop: chờ TTS dứt rồi khôi phục cờ để tiếp tục chờ wake word
+        if state_manager.is_interrupted() {
+            if tts.is_speaking() {
+                tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+                continue;
+            }
+            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+            if !state_manager.has_manual_trigger() {
+                state_manager.reset_interrupt();
+            }
+            continue;
+        }
+
+        // 3. Tạm dừng thu wake word khi hệ thống đang bận (Thinking / Speaking từ IPC hoặc Timer)
+        if tts.is_speaking() || state_manager.get_state_sync() != AssistantState::Idle {
+            tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+            continue;
+        }
+
+        // 4. Thu âm các đoạn ngắn (tối đa 3.5 giây), có thể bị ngắt ngay bởi --trigger / --stop
+        let record_res = recorder
+            .record(3.5, Some(&state_manager))
+            .map_err(|e| e.to_string());
+
         match record_res {
             Ok(samples) => {
-                if samples.len() < 3200 { // Dưới 200ms bỏ qua
+                // Nếu bị ngắt giữa chừng (do --trigger/--stop) hoặc hệ thống chuyển bận, quay lại đầu vòng lặp
+                if state_manager.has_manual_trigger()
+                    || state_manager.is_interrupted()
+                    || state_manager.get_state_sync() != AssistantState::Idle
+                {
+                    continue;
+                }
+
+                if samples.len() < 3200 {
                     continue;
                 }
 
                 let temp_wav = "/tmp/wake_input.wav";
                 if AudioRecorder::save_wav(&samples, temp_wav, 16000).is_ok() {
-                    let transcript_res = wake_whisper.transcribe_wav(temp_wav).map_err(|e| e.to_string());
+                    let transcript_res = wake_whisper
+                        .transcribe_wav(temp_wav)
+                        .map_err(|e| e.to_string());
                     if let Ok(transcript) = transcript_res {
                         let trimmed = transcript.trim();
                         if trimmed.is_empty() {
                             continue;
                         }
 
-                        // Debug log hiển thị trong journalctl để biết mic đã nghe được gì
                         println!("🎧 [Mic]: \"{}\"", trimmed);
 
-                        // Kiểm tra từ khóa Wake Word
                         if let Some((wake_word, cmd)) = detect_wake_word(trimmed) {
-                            play_chime(ChimeType::Wake);
-
                             if cmd.is_empty() {
-                                // Người dùng chỉ mới gọi tên: "Alexa" -> Đang lắng nghe câu lệnh tiếp theo
-                                println!("\n🔔 [Wake Word: {}] Đang lắng nghe câu lệnh tiếp theo...", wake_word.name());
-                                state_manager.set_state_full(
-                                    AssistantState::Listening,
-                                    Some("Đang lắng nghe...".to_string()),
-                                    None,
-                                ).await;
-
-                                // Chờ tiếng chime phát xong (250ms) để mic không thu lại tiếng chime của loa
-                                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-
-                                let followup_res = recorder.record(8.0, None).map_err(|e| e.to_string());
-                                match followup_res {
-                                    Ok(followup_samples) => {
-                                        if followup_samples.len() < 3200 {
-                                            state_manager.set_state(AssistantState::Idle, None).await;
-                                            continue;
-                                        }
-                                        let followup_wav = "/tmp/voice_input.wav";
-                                        if AudioRecorder::save_wav(&followup_samples, followup_wav, 16000).is_ok() {
-                                            state_manager.set_state_full(
-                                                AssistantState::Thinking,
-                                                Some("Đang nhận diện giọng nói...".to_string()),
-                                                None,
-                                            ).await;
-                                            let followup_res = query_whisper.transcribe_wav(followup_wav).map_err(|e| e.to_string());
-                                            if let Ok(followup_text) = followup_res {
-                                                let q = followup_text.trim();
-                                                if !q.is_empty() {
-                                                    println!("👤 Bạn: \"{}\"", q);
-                                                    state_manager.set_state_full(
-                                                        AssistantState::Thinking,
-                                                        Some("Đang xử lý...".to_string()),
-                                                        Some(q.to_string()),
-                                                    ).await;
-                                                    execute_voice_command(
-                                                        q,
-                                                        &app_index,
-                                                        model_override.as_deref(),
-                                                        &model_router,
-                                                        &ollama,
-                                                        &config,
-                                                        &tts,
-                                                        Some(&state_manager),
-                                                    )
-                                                    .await;
-                                                } else {
-                                                    state_manager.set_state(AssistantState::Idle, None).await;
-                                                }
-                                            } else {
-                                                state_manager.set_state(AssistantState::Idle, None).await;
-                                            }
-                                        } else {
-                                            state_manager.set_state(AssistantState::Idle, None).await;
-                                        }
-                                    }
-                                    Err(err) => {
-                                        eprintln!("Lỗi thu âm tiếp nối: {}", err);
-                                        state_manager.set_state(AssistantState::Idle, None).await;
-                                    }
-                                }
+                                capture_and_handle_followup(
+                                    &format!("Wake Word: {}", wake_word.name()),
+                                    &recorder,
+                                    &query_whisper,
+                                    &app_index,
+                                    &model_router,
+                                    &ollama,
+                                    &config,
+                                    &tts,
+                                    &state_manager,
+                                    model_override.as_deref(),
+                                )
+                                .await;
                             } else {
-                                // Người dùng nói cả từ khóa lẫn câu lệnh trong 1 hơi: "Alexa, mấy giờ rồi"
-                                println!("\n🔔 [Wake Word: {}] Câu lệnh tức thì: \"{}\"", wake_word.name(), cmd);
-                                state_manager.set_state_full(
-                                    AssistantState::Thinking,
-                                    Some("Đang xử lý...".to_string()),
-                                    Some(cmd.clone()),
-                                ).await;
+                                play_chime(ChimeType::Wake);
+                                println!(
+                                    "\n🔔 [Wake Word: {}] Câu lệnh tức thì: \"{}\"",
+                                    wake_word.name(),
+                                    cmd
+                                );
+                                state_manager
+                                    .set_state_full(
+                                        AssistantState::Thinking,
+                                        Some("Đang xử lý...".to_string()),
+                                        Some(cmd.clone()),
+                                    )
+                                    .await;
                                 execute_voice_command(
                                     &cmd,
                                     &app_index,
@@ -9952,7 +10204,7 @@ async fn run_wake_word_loop(
                                 .await;
                             }
 
-                            // Nghỉ 800ms sau khi trả lời để âm thanh từ loa tiêu tán khỏi phòng, tránh mic bắt lại
+                            // Nghỉ 800ms sau khi trả lời để âm loa tắt vang phòng
                             tokio::time::sleep(tokio::time::Duration::from_millis(800)).await;
                         }
                     }
@@ -9968,39 +10220,58 @@ async fn run_wake_word_loop(
 
 async fn execute_voice_command(
     query: &str,
-    app_index: &HashMap<String, DesktopApp>,
+    app_index: &Arc<HashMap<String, DesktopApp>>,
     model_override: Option<&str>,
-    model_router: &voice_ai::ai::ModelRouter,
-    ollama: &voice_ai::ai::OllamaClient,
+    model_router: &Arc<voice_ai::ai::ModelRouter>,
+    ollama: &Arc<voice_ai::ai::OllamaClient>,
     config: &Config,
-    tts: &PiperTts,
+    tts: &Arc<PiperTts>,
     state_manager: Option<&StateManager>,
 ) {
     let start_nlu = Instant::now();
-    let (handled, reply) = fast_path_nlu(query, app_index, false);
+    let q_owned = query.to_string();
+    let app_bg = app_index.clone();
+    let (handled, reply) =
+        tokio::task::spawn_blocking(move || fast_path_nlu(&q_owned, &app_bg, false))
+            .await
+            .unwrap_or((false, String::new()));
     let nlu_time = start_nlu.elapsed();
 
     if handled {
-        println!("🤖 Trợ lý ({:.2} µs): {}", nlu_time.as_secs_f64() * 1_000_000.0, reply);
+        println!(
+            "🤖 Trợ lý ({:.2} µs): {}",
+            nlu_time.as_secs_f64() * 1_000_000.0,
+            reply
+        );
         if let Some(mgr) = state_manager {
             mgr.set_state_full(
                 AssistantState::Speaking,
                 Some(reply.clone()),
                 Some(query.to_string()),
-            ).await;
+            )
+            .await;
         }
 
-        if tts.is_available() {
-            tts.speak(&reply, state_manager);
+        if tts.is_available() && !reply.is_empty() {
+            let tts_bg = tts.clone();
+            let rep_bg = reply.clone();
+            let mgr_bg = state_manager.cloned();
+            let _ = tokio::task::spawn_blocking(move || {
+                tts_bg.speak(&rep_bg, mgr_bg.as_ref());
+            })
+            .await;
         }
 
         if let Some(mgr) = state_manager {
-            mgr.set_state(AssistantState::Idle, None).await;
+            if !mgr.has_manual_trigger() {
+                mgr.set_state(AssistantState::Idle, None).await;
+            }
         }
     } else {
         execute_llm_query(
             query,
             model_override,
+            false,
             model_router,
             ollama,
             config,
@@ -10015,10 +10286,11 @@ async fn execute_voice_command(
 async fn execute_llm_query(
     prompt: &str,
     model_override: Option<&str>,
-    router: &voice_ai::ai::ModelRouter,
-    ollama: &voice_ai::ai::OllamaClient,
+    force_deep: bool,
+    router: &Arc<voice_ai::ai::ModelRouter>,
+    ollama: &Arc<voice_ai::ai::OllamaClient>,
     config: &Config,
-    tts: &PiperTts,
+    tts: &Arc<PiperTts>,
     state_manager: Option<&StateManager>,
     speak: bool,
 ) {
@@ -10029,7 +10301,9 @@ async fn execute_llm_query(
             voice_ai::ai::ChatOptions::default(),
         )
     } else {
-        router.route_prompt(prompt, &config.model).await
+        router
+            .route_prompt_with_deep(prompt, force_deep, &config.model)
+            .await
     };
 
     println!(
@@ -10059,21 +10333,36 @@ async fn execute_llm_query(
     {
         Ok(raw_reply) => {
             println!();
-            let (_thought, clean_reply) = voice_ai::ai::filter_thinking_content(&raw_reply);
+            let (_thought, mut clean_reply) = voice_ai::ai::filter_thinking_content(&raw_reply);
+            if clean_reply.trim().is_empty() {
+                clean_reply =
+                    "Dạ, tôi chưa tổng hợp kịp câu trả lời. Bạn hỏi lại ngắn gọn hơn giúp tôi nhé."
+                        .to_string();
+            }
+
             if let Some(mgr) = state_manager {
                 mgr.set_state_full(
                     AssistantState::Speaking,
                     Some(clean_reply.clone()),
                     Some(prompt.to_string()),
-                ).await;
+                )
+                .await;
             }
 
             if speak && tts.is_available() {
-                tts.speak(&clean_reply, state_manager);
+                let tts_bg = tts.clone();
+                let rep_bg = clean_reply.clone();
+                let mgr_bg = state_manager.cloned();
+                let _ = tokio::task::spawn_blocking(move || {
+                    tts_bg.speak(&rep_bg, mgr_bg.as_ref());
+                })
+                .await;
             }
 
             if let Some(mgr) = state_manager {
-                mgr.set_state(AssistantState::Idle, None).await;
+                if !mgr.has_manual_trigger() {
+                    mgr.set_state(AssistantState::Idle, None).await;
+                }
             }
         }
         Err(err_msg) => {
@@ -10083,10 +10372,20 @@ async fn execute_llm_query(
             );
             println!("⚠️ {}", msg);
             if speak && tts.is_available() {
-                tts.speak("Dạ, hiện tại dịch vụ trí tuệ nhân tạo chưa sẵn sàng.", state_manager);
+                let tts_bg = tts.clone();
+                let mgr_bg = state_manager.cloned();
+                let _ = tokio::task::spawn_blocking(move || {
+                    tts_bg.speak(
+                        "Dạ, hiện tại dịch vụ trí tuệ nhân tạo chưa sẵn sàng.",
+                        mgr_bg.as_ref(),
+                    );
+                })
+                .await;
             }
             if let Some(mgr) = state_manager {
-                mgr.set_state(AssistantState::Idle, None).await;
+                if !mgr.has_manual_trigger() {
+                    mgr.set_state(AssistantState::Idle, None).await;
+                }
             }
         }
     }
@@ -10103,7 +10402,6 @@ fn run_nlu_benchmark(iterations: usize) {
 
     let app_index = build_app_index();
 
-    // Warmup
     for &cmd in BENCHMARK_COMMANDS.iter().take(5) {
         let _ = fast_path_nlu(cmd, &app_index, true);
     }
@@ -10135,13 +10433,40 @@ fn run_nlu_benchmark(iterations: usize) {
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     println!("- Tổng số lượt thực thi : {} lượt", total_runs);
     println!("- Tổng thời gian đo     : {:.2?}", total_duration);
-    println!("- Tốc độ xử lý (Throughput): {:.0} lệnh/giây", total_runs as f64 / total_duration.as_secs_f64());
-    println!("- Độ trễ Tối thiểu (Min) : {:.3} µs ({:.6} ms)", min_us, min_us / 1000.0);
-    println!("- Độ trễ Trung vị (Median): {:.3} µs ({:.6} ms)", median_us, median_us / 1000.0);
-    println!("- Độ trễ Trung bình (Mean): {:.3} µs ({:.6} ms)", avg_us, avg_us / 1000.0);
-    println!("- Phân vị P90             : {:.3} µs ({:.6} ms)", p90_us, p90_us / 1000.0);
-    println!("- Phân vị P99             : {:.3} µs ({:.6} ms)", p99_us, p99_us / 1000.0);
-    println!("- Độ trễ Tối đa (Max)     : {:.3} µs ({:.6} ms)", max_us, max_us / 1000.0);
+    println!(
+        "- Tốc độ xử lý (Throughput): {:.0} lệnh/giây",
+        total_runs as f64 / total_duration.as_secs_f64()
+    );
+    println!(
+        "- Độ trễ Tối thiểu (Min) : {:.3} µs ({:.6} ms)",
+        min_us,
+        min_us / 1000.0
+    );
+    println!(
+        "- Độ trễ Trung vị (Median): {:.3} µs ({:.6} ms)",
+        median_us,
+        median_us / 1000.0
+    );
+    println!(
+        "- Độ trễ Trung bình (Mean): {:.3} µs ({:.6} ms)",
+        avg_us,
+        avg_us / 1000.0
+    );
+    println!(
+        "- Phân vị P90             : {:.3} µs ({:.6} ms)",
+        p90_us,
+        p90_us / 1000.0
+    );
+    println!(
+        "- Phân vị P99             : {:.3} µs ({:.6} ms)",
+        p99_us,
+        p99_us / 1000.0
+    );
+    println!(
+        "- Độ trễ Tối đa (Max)     : {:.3} µs ({:.6} ms)",
+        max_us,
+        max_us / 1000.0
+    );
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 }
 
@@ -10149,18 +10474,50 @@ fn is_exit_phrase(text: &str) -> bool {
     let t = text.to_lowercase();
     let t = t.trim().trim_end_matches(['.', '!', '?']);
     let exits = [
-        "tạm biệt", "kết thúc", "dừng lại", "dừng cuộc trò chuyện",
-        "tắt trợ lý", "đóng trợ lý", "thôi im", "im lặng", "hẹn gặp lại", "tạm biệt nhé"
+        "tạm biệt",
+        "kết thúc",
+        "dừng lại",
+        "dừng cuộc trò chuyện",
+        "tắt trợ lý",
+        "đóng trợ lý",
+        "thôi im",
+        "im lặng",
+        "hẹn gặp lại",
+        "tạm biệt nhé",
     ];
-    exits.iter().any(|&e| t == e || t.starts_with(e) || t.ends_with(e))
+    exits
+        .iter()
+        .any(|&e| t == e || t.starts_with(e) || t.ends_with(e))
+}
+
+fn detect_internal_mic_card() -> String {
+    if let Ok(cards) = std::fs::read_to_string("/proc/asound/cards") {
+        for line in cards.lines() {
+            let trimmed = line.trim();
+            if let Some(first_token) = trimmed.split_whitespace().next() {
+                if first_token.chars().all(|c| c.is_ascii_digit()) {
+                    let lower = trimmed.to_lowercase();
+                    if lower.contains("pch")
+                        || lower.contains("alc")
+                        || lower.contains("realtek")
+                        || lower.contains("sof-hda")
+                    {
+                        return first_token.to_string();
+                    }
+                }
+            }
+        }
+    }
+    "0".to_string()
 }
 
 fn ensure_mic_levels() {
+    let card = detect_internal_mic_card();
     let _ = std::process::Command::new("amixer")
-        .args(["-c", "0", "sset", "Internal Mic Boost", "1"])
+        .args(["-c", &card, "sset", "Internal Mic Boost", "1"])
         .output();
     let _ = std::process::Command::new("amixer")
-        .args(["-c", "0", "sset", "Capture", "75%"])
+        .args(["-c", &card, "sset", "Capture", "75%"])
         .output();
 }
 
@@ -11544,6 +11901,8 @@ pub struct IpcCommand {
     pub command: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deep: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -11560,10 +11919,20 @@ pub async fn send_ipc_command<P: AsRef<Path>>(
     command: &str,
     text: Option<String>,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
+    send_ipc_command_with_options(socket_path, command, text, None).await
+}
+
+pub async fn send_ipc_command_with_options<P: AsRef<Path>>(
+    socket_path: P,
+    command: &str,
+    text: Option<String>,
+    deep: Option<bool>,
+) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     let mut stream = UnixStream::connect(socket_path).await?;
     let payload = IpcCommand {
         command: command.to_string(),
         text,
+        deep,
     };
 
     let mut line = serde_json::to_string(&payload)?;
@@ -11605,7 +11974,8 @@ pub enum ActionRequest {
     Trigger,
     Stop,
     Relisten,
-    Query(String),
+    Query { text: String, deep: bool },
+    Speak(String),
 }
 
 pub struct IpcServer {
@@ -11658,6 +12028,7 @@ impl IpcServer {
                                             }
                                         }
                                         "trigger" => {
+                                            state_mgr.trigger_listen();
                                             let _ = tx.send(ActionRequest::Trigger).await;
                                             IpcResponse {
                                                 status: "ok".to_string(),
@@ -11666,7 +12037,7 @@ impl IpcServer {
                                             }
                                         }
                                         "stop" => {
-                                            state_mgr.interrupt();
+                                            state_mgr.stop_all();
                                             let _ = tx.send(ActionRequest::Stop).await;
                                             IpcResponse {
                                                 status: "ok".to_string(),
@@ -11675,7 +12046,7 @@ impl IpcServer {
                                             }
                                         }
                                         "relisten" => {
-                                            state_mgr.interrupt();
+                                            state_mgr.trigger_listen();
                                             let _ = tx.send(ActionRequest::Relisten).await;
                                             IpcResponse {
                                                 status: "ok".to_string(),
@@ -11685,12 +12056,27 @@ impl IpcServer {
                                         }
                                         "query" => {
                                             if let Some(text) = cmd.text {
-                                                let _ = tx.send(ActionRequest::Query(text)).await;
+                                                let _ = tx
+                                                    .send(ActionRequest::Query {
+                                                        text,
+                                                        deep: cmd.deep.unwrap_or(false),
+                                                    })
+                                                    .await;
                                             }
                                             IpcResponse {
                                                 status: "ok".to_string(),
                                                 message: Some("Query enqueued".to_string()),
                                                 state: None,
+                                            }
+                                        }
+                                        "speak" => {
+                                            if let Some(text) = cmd.text {
+                                                let _ = tx.send(ActionRequest::Speak(text)).await;
+                                            }
+                                            IpcResponse {
+                                                status: "ok".to_string(),
+                                                message: Some("Speak enqueued".to_string()),
+                                                state: Some("speaking".to_string()),
                                             }
                                         }
                                         _ => IpcResponse {

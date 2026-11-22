@@ -1,23 +1,19 @@
 [Unit]
 Description=Voice AI Assistant Daemon (Rust Native)
-Documentation=https://github.com/TuNgocCoder-zako/ai-assistant
-After=pipewire.service pipewire-pulse.service
+Documentation=https://github.com/TuNgocCoder-zako/voiceAI_Rust
+After=graphical-session.target pipewire.service pipewire-pulse.service
 Wants=pipewire.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/ngoctu/Projects/rust/voice-ai
-ExecStart=/home/ngoctu/.local/bin/ai-assistant-rs
+WorkingDirectory=%h/Projects/rust/voice-ai
+ExecStart=%h/.local/bin/ai-assistant-rs
 Restart=always
 RestartSec=3
-Environment=PATH=/home/ngoctu/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=XDG_RUNTIME_DIR=/run/user/%U
-Environment=WAYLAND_DISPLAY=wayland-0
-Environment=DISPLAY=:0
-Environment=XDG_CURRENT_DESKTOP=ubuntu:GNOME
-Environment=QT_QPA_PLATFORM=xcb
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
 StandardOutput=journal
 StandardError=journal
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

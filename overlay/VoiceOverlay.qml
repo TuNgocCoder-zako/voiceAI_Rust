@@ -232,7 +232,13 @@ ShellRoot {
 
     function copyToClipboard(text) {
         if (!text || text.length === 0) return;
-        cmdRunner.commandList = ["/usr/bin/wl-copy", "--", text];
+        if (cmdRunner.running) cmdRunner.running = false;
+        cmdRunner.commandList = [
+            "/bin/sh", "-c",
+            "if command -v wl-copy >/dev/null 2>&1; then printf '%s' \"$1\" | wl-copy; elif command -v xclip >/dev/null 2>&1; then printf '%s' \"$1\" | xclip -selection clipboard; fi",
+            "--",
+            text
+        ];
         cmdRunner.running = true;
         showToast("📋 Đã sao chép vào bộ nhớ tạm!");
     }
@@ -244,8 +250,8 @@ ShellRoot {
             cmdRunner.running = true;
             showToast("🔇 Đã dừng đọc");
         } else {
-            let toSpeak = root.longAnswerText.substring(0, 300);
-            cmdRunner.commandList = [root.assistantBin, "--query", toSpeak];
+            let toSpeak = root.longAnswerText.substring(0, 1200);
+            cmdRunner.commandList = [root.assistantBin, "--speak", toSpeak];
             cmdRunner.running = true;
             showToast("🔊 Đang đọc phản hồi...");
         }
@@ -271,6 +277,9 @@ ShellRoot {
         root.isCardDismissed = false;
 
         let args = [root.assistantBin, "--query", query];
+        if (deep) {
+            args.push("--deep");
+        }
         if (cmdRunner.running) {
             cmdRunner.running = false;
         }
@@ -279,9 +288,12 @@ ShellRoot {
     }
 
     function takeScreenshot() {
-        showToast("📸 Đã chụp màn hình!");
+        showToast("📸 Đang mở chụp màn hình...");
         if (cmdRunner.running) cmdRunner.running = false;
-        cmdRunner.commandList = ["/usr/bin/grim"];
+        cmdRunner.commandList = [
+            "/bin/sh", "-c",
+            "if [ -n \"$HYPRLAND_INSTANCE_SIGNATURE\" ] && command -v grim >/dev/null 2>&1; then grim; elif command -v gnome-screenshot >/dev/null 2>&1; then gnome-screenshot -a; else gdbus call --session --dest org.freedesktop.portal.Desktop --object-path /org/freedesktop/portal/desktop --method org.freedesktop.portal.Screenshot.Screenshot '' \"{'interactive': <true>}\"; fi"
+        ];
         cmdRunner.running = true;
     }
 

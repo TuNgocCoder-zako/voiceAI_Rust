@@ -10,7 +10,8 @@ pub enum ActionRequest {
     Trigger,
     Stop,
     Relisten,
-    Query(String),
+    Query { text: String, deep: bool },
+    Speak(String),
 }
 
 pub struct IpcServer {
@@ -63,6 +64,7 @@ impl IpcServer {
                                             }
                                         }
                                         "trigger" => {
+                                            state_mgr.trigger_listen();
                                             let _ = tx.send(ActionRequest::Trigger).await;
                                             IpcResponse {
                                                 status: "ok".to_string(),
@@ -71,7 +73,7 @@ impl IpcServer {
                                             }
                                         }
                                         "stop" => {
-                                            state_mgr.interrupt();
+                                            state_mgr.stop_all();
                                             let _ = tx.send(ActionRequest::Stop).await;
                                             IpcResponse {
                                                 status: "ok".to_string(),
@@ -80,7 +82,7 @@ impl IpcServer {
                                             }
                                         }
                                         "relisten" => {
-                                            state_mgr.interrupt();
+                                            state_mgr.trigger_listen();
                                             let _ = tx.send(ActionRequest::Relisten).await;
                                             IpcResponse {
                                                 status: "ok".to_string(),
@@ -90,12 +92,27 @@ impl IpcServer {
                                         }
                                         "query" => {
                                             if let Some(text) = cmd.text {
-                                                let _ = tx.send(ActionRequest::Query(text)).await;
+                                                let _ = tx
+                                                    .send(ActionRequest::Query {
+                                                        text,
+                                                        deep: cmd.deep.unwrap_or(false),
+                                                    })
+                                                    .await;
                                             }
                                             IpcResponse {
                                                 status: "ok".to_string(),
                                                 message: Some("Query enqueued".to_string()),
                                                 state: None,
+                                            }
+                                        }
+                                        "speak" => {
+                                            if let Some(text) = cmd.text {
+                                                let _ = tx.send(ActionRequest::Speak(text)).await;
+                                            }
+                                            IpcResponse {
+                                                status: "ok".to_string(),
+                                                message: Some("Speak enqueued".to_string()),
+                                                state: Some("speaking".to_string()),
                                             }
                                         }
                                         _ => IpcResponse {

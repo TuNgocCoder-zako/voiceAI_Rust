@@ -80,6 +80,7 @@ pub struct StateManager {
     current_state: Arc<AtomicU8>,
     broadcaster: broadcast::Sender<StateEvent>,
     is_interrupted: Arc<AtomicBool>,
+    manual_trigger: Arc<AtomicBool>,
 }
 
 impl StateManager {
@@ -89,6 +90,7 @@ impl StateManager {
             current_state: Arc::new(AtomicU8::new(AssistantState::Idle as u8)),
             broadcaster: tx,
             is_interrupted: Arc::new(AtomicBool::new(false)),
+            manual_trigger: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -155,6 +157,26 @@ impl StateManager {
 
     pub fn is_interrupted(&self) -> bool {
         self.is_interrupted.load(Ordering::SeqCst)
+    }
+
+    /// Đánh thức luồng thu âm ngay lập tức (dùng cho --trigger và --relisten)
+    pub fn trigger_listen(&self) {
+        self.manual_trigger.store(true, Ordering::SeqCst);
+        self.is_interrupted.store(true, Ordering::SeqCst);
+    }
+
+    /// Dừng mọi tác vụ đang nói / đang thu mà không mở lại mic
+    pub fn stop_all(&self) {
+        self.manual_trigger.store(false, Ordering::SeqCst);
+        self.is_interrupted.store(true, Ordering::SeqCst);
+    }
+
+    pub fn has_manual_trigger(&self) -> bool {
+        self.manual_trigger.load(Ordering::SeqCst)
+    }
+
+    pub fn take_manual_trigger(&self) -> bool {
+        self.manual_trigger.swap(false, Ordering::SeqCst)
     }
 }
 
