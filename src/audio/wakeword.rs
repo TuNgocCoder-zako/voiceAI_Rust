@@ -23,7 +23,7 @@ impl WakeWordType {
 // Bao quát toàn diện các biến thể ngữ âm học mà Whisper thường nhận diện khi người Việt gọi:
 // Alexa, Alex, Alessia, A Lêsê, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, A lê sạch, A lai xa...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|alessia|alesia|aleccia|alesa|a\s*les\s*e|a\s*le\s*se|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik|lai|lay)(?:\s*[-_]?\s*(?:xa|sa|ca|se|ce|xe))?|(?:a|e)\s*[-_]?\s*(?:le|lech|lec)\s*[-_]?\s*(?:xa|sa|ca|sach|say|se|ce|xe)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa|se)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|alessia|alesia|aleccia|alesa|a\s*les\s*e|a\s*le\s*se|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik|lai|lay)(?:\s*[-_]?\s*(?:xa|sa|ca|se|ce|xe))?|(?:a\s*|e\s*)?(?:le|lech|lec)\s*[-_]?\s*(?:xa|sa|ca|sach|say|se|ce|xe)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa|se)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -231,6 +231,8 @@ mod tests {
             ("Alessia mấy giờ rồi", "mấy giờ rồi"),
             ("A LÊSÊ!", ""),
             ("A LÊSÊ mấy giờ rồi", "mấy giờ rồi"),
+            ("Lê xa", ""),
+            ("Lê xa mấy giờ rồi", "mấy giờ rồi"),
         ];
         for (input, expected_cmd) in cases {
             let r = detect_wake_word(input);
