@@ -102,6 +102,7 @@ dirs = "6.0"
 cpal = "0.15"
 ringbuf = "0.4"
 ort = "=2.0.0-rc.15"
+whisper-rs = "=0.16.0"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
@@ -3896,22 +3897,26 @@ FILE: src/audio/stt.rs
 ================================================================================
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 pub struct WhisperEngine {
     cli_path: PathBuf,
     model_path: PathBuf,
     threads: usize,
+    ctx: Mutex<Option<WhisperContext>>,
 }
 
 impl WhisperEngine {
     pub fn new() -> Self {
         let home = dirs::home_dir().unwrap_or_default();
         let base_dir = std::env::current_dir().unwrap_or_default();
-
         let cli_path = home.join(".local/bin/whisper-cli");
 
         let candidates = [
-            std::env::var("AI_ASSISTANT_WHISPER_MODEL").map(PathBuf::from).unwrap_or_default(),
+            std::env::var("AI_ASSISTANT_WHISPER_MODEL")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
             base_dir.join("models/whisper/ggml-small.bin"),
             base_dir.join("models/whisper/ggml-base.bin"),
             home.join("Projects/rust/voice-ai/models/whisper/ggml-small.bin"),
@@ -3920,9 +3925,10 @@ impl WhisperEngine {
             home.join("Projects/python/voice-ai/models/whisper/ggml-base.bin"),
         ];
 
-        let model_path = candidates.into_iter().find(|p| p.exists()).unwrap_or_else(|| {
-            base_dir.join("models/whisper/ggml-base.bin")
-        });
+        let model_path = candidates
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap_or_else(|| base_dir.join("models/whisper/ggml-base.bin"));
 
         let num_cpus = std::thread::available_parallelism()
             .map(|n| (n.get() / 2).max(4).min(8))
@@ -3932,26 +3938,30 @@ impl WhisperEngine {
             cli_path,
             model_path,
             threads: num_cpus,
+            ctx: Mutex::new(None),
         }
     }
 
-    /// Khởi tạo engine nhẹ cho Wake Word (ưu tiên ggml-base) để phản hồi tức thì dưới 1 giây
+    /// Khởi tạo engine nhẹ (ưu tiên ggml-base) cho chế độ dự phòng khi chưa có ONNX
     pub fn fast_wake_engine() -> Self {
         let home = dirs::home_dir().unwrap_or_default();
         let base_dir = std::env::current_dir().unwrap_or_default();
         let cli_path = home.join(".local/bin/whisper-cli");
 
         let candidates = [
-            std::env::var("AI_ASSISTANT_WAKE_MODEL").map(PathBuf::from).unwrap_or_default(),
+            std::env::var("AI_ASSISTANT_WAKE_MODEL")
+                .map(PathBuf::from)
+                .unwrap_or_default(),
             base_dir.join("models/whisper/ggml-base.bin"),
             home.join("Projects/rust/voice-ai/models/whisper/ggml-base.bin"),
             base_dir.join("models/whisper/ggml-small.bin"),
             home.join("Projects/rust/voice-ai/models/whisper/ggml-small.bin"),
         ];
 
-        let model_path = candidates.into_iter().find(|p| p.exists()).unwrap_or_else(|| {
-            base_dir.join("models/whisper/ggml-base.bin")
-        });
+        let model_path = candidates
+            .into_iter()
+            .find(|p| p.exists())
+            .unwrap_or_else(|| base_dir.join("models/whisper/ggml-base.bin"));
 
         let num_cpus = std::thread::available_parallelism()
             .map(|n| (n.get() / 2).max(4).min(8))
@@ -3961,6 +3971,7 @@ impl WhisperEngine {
             cli_path,
             model_path,
             threads: num_cpus,
+            ctx: Mutex::new(None),
         }
     }
 
@@ -3975,12 +3986,95 @@ impl WhisperEngine {
     }
 
     pub fn is_available(&self) -> bool {
-        self.cli_path.exists() && self.model_path.exists()
+        self.model_path.exists()
     }
 
-    /// Nhận diện giọng nói từ tệp âm thanh WAV
-    pub fn transcribe_wav<P: AsRef<Path>>(&self, wav_path: P) -> Result<String, Box<dyn std::error::Error>> {
-        if !self.is_available() {
+    /// Nạp sẵn mô hình Whisper vào RAM một lần duy nhất khi khởi động daemon
+    pub fn preload(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.model_path.exists() {
+            return Err(format!("Không tìm thấy model Whisper tại {:?}", self.model_path).into());
+        }
+        let mut guard = self.ctx.lock().unwrap();
+        if guard.is_none() {
+            let model_str = self
+                .model_path
+                .to_str()
+                .ok_or("Đường dẫn model Whisper không phải UTF-8 hợp lệ")?;
+            let ctx = WhisperContext::new_with_params(model_str, WhisperContextParameters::default())
+                .map_err(|e| format!("Lỗi nạp WhisperContext ({:?}): {:?}", self.model_path, e))?;
+            println!("⚡ [Whisper Native RAM]: Đã nạp sẵn model {:?} vào bộ nhớ.", self.model_path);
+            *guard = Some(ctx);
+        }
+        Ok(())
+    }
+
+    /// Nhận diện giọng nói trực tiếp từ bộ đệm PCM 16kHz mono i16 trong RAM (0 disk I/O)
+    pub fn transcribe_samples(
+        &self,
+        samples_i16: &[i16],
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        if samples_i16.is_empty() {
+            return Ok(String::new());
+        }
+
+        self.preload()?;
+
+        let mut audio_f32 = vec![0.0f32; samples_i16.len()];
+        whisper_rs::convert_integer_to_float_audio(samples_i16, &mut audio_f32)
+            .map_err(|e| format!("Lỗi chuyển đổi PCM -> f32: {:?}", e))?;
+
+        let guard = self.ctx.lock().unwrap();
+        let ctx = guard.as_ref().ok_or("WhisperContext chưa sẵn sàng")?;
+        let mut state = ctx
+            .create_state()
+            .map_err(|e| format!("Không tạo được WhisperState: {:?}", e))?;
+
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_n_threads(self.threads as i32);
+        params.set_language(Some("vi"));
+        params.set_translate(false);
+        // Chống ảo giác phụ đề trên các lệnh thoại ngắn độc lập
+        params.set_no_context(true);
+        params.set_temperature(0.0);
+        params.set_temperature_inc(0.0); // Tương đương cờ -nf (--no-fallback)
+        params.set_suppress_blank(true);
+        params.set_suppress_nst(true);   // Tương đương --suppress-nst
+        // Tắt toàn bộ log stdout của C++
+        params.set_print_special(false);
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+
+        state
+            .full(params, &audio_f32)
+            .map_err(|e| format!("Lỗi suy luận Whisper: {:?}", e))?;
+
+        let num_segments = state.full_n_segments();
+        let mut parts: Vec<String> = Vec::with_capacity(num_segments.max(0) as usize);
+        for i in 0..num_segments {
+            if let Some(seg) = state.get_segment(i) {
+                if let Ok(seg_text) = seg.to_str_lossy() {
+                    let trimmed = seg_text.trim();
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+
+        let text = parts.join(" ").trim().to_string();
+        if is_hallucination(&text) {
+            return Ok(String::new());
+        }
+        Ok(text)
+    }
+
+    /// Giữ lại tương thích khi cần phiên âm trực tiếp từ tệp WAV ngoài
+    pub fn transcribe_wav<P: AsRef<Path>>(
+        &self,
+        wav_path: P,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        if !self.cli_path.exists() || !self.model_path.exists() {
             return Err("Whisper CLI hoặc model không khả dụng".into());
         }
 
@@ -4008,10 +4102,8 @@ impl WhisperEngine {
 
         let raw = String::from_utf8_lossy(&output.stdout);
         let mut clean_lines: Vec<&str> = Vec::new();
-
         for line in raw.lines() {
             let trimmed = line.trim();
-            // Bỏ qua các dòng log debug của whisper.cpp
             if trimmed.starts_with("read_audio_data:") || trimmed.is_empty() {
                 continue;
             }
@@ -4019,11 +4111,9 @@ impl WhisperEngine {
         }
 
         let text = clean_lines.join(" ").trim().to_string();
-
         if is_hallucination(&text) {
             return Ok(String::new());
         }
-
         Ok(text)
     }
 }
@@ -4037,7 +4127,6 @@ fn is_hallucination(text: &str) -> bool {
         return true;
     }
 
-    // Các ký hiệu âm thanh phụ của Whisper: (tiếng thở), [âm nhạc], *S*, (đóng hộng)...
     if (t.starts_with('(') && t.ends_with(')'))
         || (t.starts_with('[') && t.ends_with(']'))
         || (t.starts_with('*') && t.ends_with('*'))
@@ -4047,7 +4136,6 @@ fn is_hallucination(text: &str) -> bool {
     }
 
     let lower = t.to_lowercase();
-    // Lọc triệt để các câu ảo giác phụ đề YouTube từ mô hình Whisper khi mic yên tĩnh
     const YOUTUBE_HALLUCINATIONS: &[&str] = &[
         "video hấp dẫn",
         "subscribe",
@@ -4696,19 +4784,20 @@ FILE: src/bin/ai-assistant.rs
 use clap::Parser;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use voice_ai::audio::{
     detect_wake_word, AudioRecorder, OpenWakeWordDetector, SileroVad, WhisperEngine,
 };
 use voice_ai::config::Config;
+use voice_ai::core::memory::ConversationHistory;
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::core::nlu::router::TIMER_MANAGER;
 use voice_ai::core::state::{AssistantState, StateManager};
 use voice_ai::ipc::client::{send_ipc_command, send_ipc_command_with_options};
 use voice_ai::ipc::server::{ActionRequest, IpcServer};
-use voice_ai::speech::{play_chime, ChimeType, PiperTts};
+use voice_ai::speech::{play_chime, ChimeType, PiperTts, SentenceStreamSplitter};
 use voice_ai::tools::apps::{build_app_index, DesktopApp};
 use voice_ai::tools::system::is_media_playing;
 
@@ -4872,6 +4961,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.model,
     ));
     let model_router = Arc::new(voice_ai::ai::ModelRouter::new(&config.ollama_url));
+    let history = Arc::new(Mutex::new(ConversationHistory::new(3, 120)));
 
     // 3. Single Query Execution (đã vá lỗi Double Execution)
     if let Some(q) = args.query {
@@ -4910,6 +5000,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.deep,
                 &model_router,
                 &ollama,
+                &history,
                 &config,
                 &tts,
                 None,
@@ -4922,6 +5013,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Dedicated Hands-Free Wake Word Mode
     if args.wake_word {
+        if let Err(e) = whisper.preload() {
+            eprintln!("⚠️ Chưa nạp sẵn được Whisper RAM: {}", e);
+        }
         let wake_whisper = Arc::new(WhisperEngine::fast_wake_engine());
         let state_manager = StateManager::new();
         TIMER_MANAGER.spawn_watcher(tts.clone(), state_manager.clone());
@@ -4933,6 +5027,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app_index.clone(),
             model_router.clone(),
             ollama.clone(),
+            history.clone(),
             config.clone(),
             tts.clone(),
             state_manager,
@@ -4956,12 +5051,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if samples.len() < 3200 {
                         continue;
                     }
-                    let temp_wav = "/tmp/voice_input.wav";
-                    if AudioRecorder::save_wav(&samples, temp_wav, 16000).is_ok() {
-                        println!("⏳ Đang nhận diện qua Whisper...");
-                        let start_stt = Instant::now();
-                        match whisper.transcribe_wav(temp_wav) {
-                            Ok(user_text) => {
+                    println!("⏳ Đang nhận diện qua Whisper...");
+                    let start_stt = Instant::now();
+                    match whisper.transcribe_samples(&samples) {
+                        Ok(user_text) => {
                                 let stt_time = start_stt.elapsed();
                                 let trimmed = user_text.trim();
                                 if trimmed.is_empty() {
@@ -4988,6 +5081,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     args.model.as_deref(),
                                     &model_router,
                                     &ollama,
+                                    &history,
                                     &config,
                                     &tts,
                                     None,
@@ -4997,7 +5091,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(e) => eprintln!("Lỗi STT: {}", e),
                         }
                     }
-                }
                 Err(e) => {
                     eprintln!("Lỗi thu âm: {}", e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -5051,6 +5144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     args.deep,
                     &model_router,
                     &ollama,
+                    &history,
                     &config,
                     &tts,
                     None,
@@ -5065,6 +5159,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Default: Run Daemon & IPC Server with Integrated Hands-Free Wake Word + Timer Watcher
     println!("🌟 Khởi chạy Voice AI Assistant Daemon (Rust Core v2.5.0)...");
     ensure_mic_levels();
+    if let Err(e) = whisper.preload() {
+        eprintln!("⚠️ Chưa nạp sẵn được Whisper RAM: {}", e);
+    }
     println!("🎧 Đang túc trực lắng nghe từ khóa: 'Alexa', 'Trợ lý ơi', 'Hey Jarvis'...");
     let state_manager = StateManager::new();
     let (action_tx, mut action_rx) = mpsc::channel::<ActionRequest>(64);
@@ -5094,6 +5191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ww_app_index = app_index.clone();
     let ww_router = model_router.clone();
     let ww_ollama = ollama.clone();
+    let ww_history = history.clone();
     let ww_config = config.clone();
     let ww_tts = tts.clone();
     let ww_state_mgr = state_manager.clone();
@@ -5112,6 +5210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ww_app_index,
                 ww_router,
                 ww_ollama,
+                ww_history,
                 ww_config,
                 ww_tts,
                 ww_state_mgr,
@@ -5179,6 +5278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let router_clone = model_router.clone();
                 let ollama_clone = ollama.clone();
                 let cfg_clone = config.clone();
+                let history_clone = history.clone();
 
                 tokio::spawn(async move {
                     state_mgr
@@ -5228,6 +5328,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             deep,
                             &router_clone,
                             &ollama_clone,
+                            &history_clone,
                             &cfg_clone,
                             &tts_clone,
                             Some(&state_mgr),
@@ -5332,6 +5433,7 @@ async fn capture_and_handle_followup(
     app_index: &Arc<HashMap<String, DesktopApp>>,
     model_router: &Arc<voice_ai::ai::ModelRouter>,
     ollama: &Arc<voice_ai::ai::OllamaClient>,
+    history: &Arc<Mutex<ConversationHistory>>,
     config: &Config,
     tts: &Arc<PiperTts>,
     state_manager: &StateManager,
@@ -5373,42 +5475,44 @@ async fn capture_and_handle_followup(
                 }
                 return;
             }
-            let followup_wav = "/tmp/voice_input.wav";
-            if AudioRecorder::save_wav(&followup_samples, followup_wav, 16000).is_ok() {
-                state_manager
-                    .set_state_full(
-                        AssistantState::Thinking,
-                        Some("Đang nhận diện giọng nói...".to_string()),
-                        None,
-                    )
-                    .await;
-                let stt_res = query_whisper
-                    .transcribe_wav(followup_wav)
-                    .map_err(|e| e.to_string());
-                if let Ok(followup_text) = stt_res {
-                    let q = followup_text.trim();
-                    if !q.is_empty() {
-                        println!("👤 Bạn: \"{}\"", q);
-                        state_manager
-                            .set_state_full(
-                                AssistantState::Thinking,
-                                Some("Đang xử lý...".to_string()),
-                                Some(q.to_string()),
-                            )
-                            .await;
-                        execute_voice_command(
-                            q,
-                            app_index,
-                            model_override,
-                            model_router,
-                            ollama,
-                            config,
-                            tts,
-                            Some(state_manager),
+
+            state_manager
+                .set_state_full(
+                    AssistantState::Thinking,
+                    Some("Đang nhận diện giọng nói...".to_string()),
+                    None,
+                )
+                .await;
+
+            let stt_start = Instant::now();
+            let stt_res = query_whisper
+                .transcribe_samples(&followup_samples)
+                .map_err(|e| e.to_string());
+
+            if let Ok(followup_text) = stt_res {
+                let q = followup_text.trim();
+                if !q.is_empty() {
+                    println!("👤 Bạn ({:.2?}): \"{}\"", stt_start.elapsed(), q);
+                    state_manager
+                        .set_state_full(
+                            AssistantState::Thinking,
+                            Some("Đang xử lý...".to_string()),
+                            Some(q.to_string()),
                         )
                         .await;
-                        return;
-                    }
+                    execute_voice_command(
+                        q,
+                        app_index,
+                        model_override,
+                        model_router,
+                        ollama,
+                        history,
+                        config,
+                        tts,
+                        Some(state_manager),
+                    )
+                    .await;
+                    return;
                 }
             }
             if !state_manager.has_manual_trigger() {
@@ -5432,6 +5536,7 @@ async fn run_wake_word_loop(
     app_index: Arc<HashMap<String, DesktopApp>>,
     model_router: Arc<voice_ai::ai::ModelRouter>,
     ollama: Arc<voice_ai::ai::OllamaClient>,
+    history: Arc<Mutex<ConversationHistory>>,
     config: Config,
     tts: Arc<PiperTts>,
     state_manager: StateManager,
@@ -5470,6 +5575,7 @@ async fn run_wake_word_loop(
                 &app_index,
                 &model_router,
                 &ollama,
+                &history,
                 &config,
                 &tts,
                 &state_manager,
@@ -5550,6 +5656,7 @@ async fn run_wake_word_loop(
                                         &app_index,
                                         &model_router,
                                         &ollama,
+                                        &history,
                                         &config,
                                         &tts,
                                         &state_manager,
@@ -5608,6 +5715,7 @@ async fn run_wake_word_loop(
                                     &app_index,
                                     &model_router,
                                     &ollama,
+                                    &history,
                                     &config,
                                     &tts,
                                     &state_manager,
@@ -5629,6 +5737,7 @@ async fn run_wake_word_loop(
                                     model_override.as_deref(),
                                     &model_router,
                                     &ollama,
+                                    &history,
                                     &config,
                                     &tts,
                                     Some(&state_manager),
@@ -5650,6 +5759,7 @@ async fn execute_voice_command(
     model_override: Option<&str>,
     model_router: &Arc<voice_ai::ai::ModelRouter>,
     ollama: &Arc<voice_ai::ai::OllamaClient>,
+    history: &Arc<Mutex<ConversationHistory>>,
     config: &Config,
     tts: &Arc<PiperTts>,
     state_manager: Option<&StateManager>,
@@ -5700,6 +5810,7 @@ async fn execute_voice_command(
             false,
             model_router,
             ollama,
+            history,
             config,
             tts,
             state_manager,
@@ -5715,6 +5826,7 @@ async fn execute_llm_query(
     force_deep: bool,
     router: &Arc<voice_ai::ai::ModelRouter>,
     ollama: &Arc<voice_ai::ai::OllamaClient>,
+    history: &Arc<Mutex<ConversationHistory>>,
     config: &Config,
     tts: &Arc<PiperTts>,
     state_manager: Option<&StateManager>,
@@ -5738,25 +5850,81 @@ async fn execute_llm_query(
         role.label()
     );
 
-    let messages = vec![
-        voice_ai::ai::ChatMessage {
-            role: "system".to_string(),
-            content: voice_ai::ai::ollama::SYSTEM_PROMPT.to_string(),
-        },
-        voice_ai::ai::ChatMessage {
-            role: "user".to_string(),
-            content: prompt.to_string(),
-        },
-    ];
+    let messages = {
+        let mut hist = history.lock().unwrap();
+        hist.build_messages(voice_ai::ai::ollama::SYSTEM_PROMPT, prompt)
+    };
 
-    match ollama
+    // Mở luồng TTS song song để đọc ngay câu đầu tiên khi Ollama vừa sinh xong dấu chấm
+    let mut tts_tx_opt: Option<std::sync::mpsc::Sender<String>> = None;
+    let mut tts_handle: Option<tokio::task::JoinHandle<bool>> = None;
+
+    if speak && tts.is_available() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let tts_bg = tts.clone();
+        let mgr_bg = state_manager.cloned();
+        let handle = tokio::task::spawn_blocking(move || tts_bg.speak_stream(rx, mgr_bg.as_ref()));
+        tts_tx_opt = Some(tx);
+        tts_handle = Some(handle);
+    }
+
+    let mut splitter = SentenceStreamSplitter::new();
+    let mut visible_acc = String::new();
+    let prompt_owned = prompt.to_string();
+
+    let stream_res = ollama
         .chat_with_options(Some(&target_model), messages, Some(options), |chunk| {
             print!("{}", chunk);
             let _ = io::stdout().flush();
+
+            if let Some(mgr) = state_manager {
+                if mgr.is_interrupted() {
+                    tts_tx_opt = None; // Đóng kênh TTS ngay khi có tín hiệu ngắt
+                    return;
+                }
+            }
+
+            let ready_sentences = splitter.push(chunk);
+            for sent in ready_sentences {
+                if !visible_acc.is_empty() {
+                    visible_acc.push(' ');
+                }
+                visible_acc.push_str(&sent);
+
+                if let Some(ref tx) = tts_tx_opt {
+                    let _ = tx.send(sent);
+                }
+
+                // Cập nhật Dynamic Island ngay khi có câu đầu tiên
+                if let Some(mgr) = state_manager {
+                    let mgr_c = mgr.clone();
+                    let text_snap = visible_acc.clone();
+                    let q_snap = prompt_owned.clone();
+                    tokio::spawn(async move {
+                        mgr_c
+                            .set_state_full(AssistantState::Speaking, Some(text_snap), Some(q_snap))
+                            .await;
+                    });
+                }
+            }
         })
         .await
-        .map_err(|e| e.to_string())
-    {
+        .map_err(|e| e.to_string());
+
+    // Xả nốt câu cuối còn nằm trong splitter
+    for last_sent in splitter.flush() {
+        if !visible_acc.is_empty() {
+            visible_acc.push(' ');
+        }
+        visible_acc.push_str(&last_sent);
+        if let Some(ref tx) = tts_tx_opt {
+            let _ = tx.send(last_sent);
+        }
+    }
+    // Đóng kênh để Piper biết đã hết câu và tự hoàn tất phát âm
+    drop(tts_tx_opt);
+
+    match stream_res {
         Ok(raw_reply) => {
             println!();
             let (_thought, mut clean_reply) = voice_ai::ai::filter_thinking_content(&raw_reply);
@@ -5764,6 +5932,12 @@ async fn execute_llm_query(
                 clean_reply =
                     "Dạ, tôi chưa tổng hợp kịp câu trả lời. Bạn hỏi lại ngắn gọn hơn giúp tôi nhé."
                         .to_string();
+            }
+
+            // Lưu vào bộ nhớ hội thoại cho các câu hỏi nối tiếp
+            {
+                let mut hist = history.lock().unwrap();
+                hist.push_turn(prompt, &clean_reply);
             }
 
             if let Some(mgr) = state_manager {
@@ -5775,14 +5949,8 @@ async fn execute_llm_query(
                 .await;
             }
 
-            if speak && tts.is_available() {
-                let tts_bg = tts.clone();
-                let rep_bg = clean_reply.clone();
-                let mgr_bg = state_manager.cloned();
-                let _ = tokio::task::spawn_blocking(move || {
-                    tts_bg.speak(&rep_bg, mgr_bg.as_ref());
-                })
-                .await;
+            if let Some(handle) = tts_handle {
+                let _ = handle.await;
             }
 
             if let Some(mgr) = state_manager {
@@ -5792,6 +5960,9 @@ async fn execute_llm_query(
             }
         }
         Err(err_msg) => {
+            if let Some(handle) = tts_handle {
+                let _ = handle.await;
+            }
             let msg = format!(
                 "Dạ, hiện tại dịch vụ Ollama chưa thể xử lý mô hình '{}': {}",
                 target_model, err_msg
@@ -6570,6 +6741,95 @@ impl MemoryManager {
 impl Default for MemoryManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+use crate::ai::ChatMessage;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+/// Bộ nhớ ngữ cảnh hội thoại ngắn hạn (trượt N tin nhắn gần nhất, tự hết hạn theo TTL)
+pub struct ConversationHistory {
+    messages: VecDeque<ChatMessage>,
+    max_messages: usize,
+    ttl: Duration,
+    last_updated: Option<Instant>,
+}
+
+impl ConversationHistory {
+    pub fn new(max_turns: usize, ttl_secs: u64) -> Self {
+        Self {
+            messages: VecDeque::with_capacity(max_turns * 2),
+            max_messages: max_turns * 2,
+            ttl: Duration::from_secs(ttl_secs),
+            last_updated: None,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.last_updated = None;
+    }
+
+    fn expire_if_stale(&mut self) {
+        if let Some(last) = self.last_updated {
+            if last.elapsed() > self.ttl {
+                self.messages.clear();
+                self.last_updated = None;
+            }
+        }
+    }
+
+    pub fn build_messages(&mut self, system_prompt: &str, current_prompt: &str) -> Vec<ChatMessage> {
+        self.expire_if_stale();
+        let mut out = Vec::with_capacity(self.messages.len() + 2);
+        out.push(ChatMessage {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+        });
+        for m in &self.messages {
+            out.push(m.clone());
+        }
+        out.push(ChatMessage {
+            role: "user".to_string(),
+            content: current_prompt.to_string(),
+        });
+        out
+    }
+
+    pub fn push_turn(&mut self, user_msg: &str, assistant_msg: &str) {
+        self.expire_if_stale();
+        self.messages.push_back(ChatMessage {
+            role: "user".to_string(),
+            content: user_msg.to_string(),
+        });
+        self.messages.push_back(ChatMessage {
+            role: "assistant".to_string(),
+            content: assistant_msg.to_string(),
+        });
+        while self.messages.len() > self.max_messages {
+            self.messages.pop_front();
+        }
+        self.last_updated = Some(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_conversation_history_sliding_window() {
+        let mut hist = ConversationHistory::new(2, 120);
+        hist.push_turn("Câu 1", "Đáp 1");
+        hist.push_turn("Câu 2", "Đáp 2");
+        hist.push_turn("Câu 3", "Đáp 3");
+
+        let msgs = hist.build_messages("SYS", "Câu 4");
+        // 1 system + 4 history (Câu 2, Đáp 2, Câu 3, Đáp 3) + 1 current user = 6
+        assert_eq!(msgs.len(), 6);
+        assert_eq!(msgs[1].content, "Câu 2");
+        assert_eq!(msgs[5].content, "Câu 4");
     }
 }
 
@@ -8271,7 +8531,7 @@ pub mod sanitize;
 pub mod tts;
 
 pub use chime::{play_chime, ChimeType};
-pub use sanitize::sanitize_text_for_voice;
+pub use sanitize::{sanitize_text_for_voice, SentenceStreamSplitter};
 pub use tts::PiperTts;
 
 
@@ -8404,9 +8664,161 @@ pub fn sanitize_text_for_voice(text: &str) -> String {
     MULTI_SPACE_RE.replace_all(&t, " ").trim().to_string()
 }
 
+/// Tách luồng token từ Ollama thành từng câu hoàn chỉnh theo thời gian thực để đọc TTS ngay,
+/// đồng thời lọc bỏ khối `<think>...</think>` ngay cả khi thẻ bị tách ngang qua nhiều chunk.
+pub struct SentenceStreamSplitter {
+    raw_pending: String,
+    visible_buf: String,
+    in_think: bool,
+}
+
+impl SentenceStreamSplitter {
+    pub fn new() -> Self {
+        Self {
+            raw_pending: String::new(),
+            visible_buf: String::new(),
+            in_think: false,
+        }
+    }
+
+    pub fn push(&mut self, chunk: &str) -> Vec<String> {
+        self.raw_pending.push_str(chunk);
+        self.consume_think_tags();
+        self.extract_ready_sentences()
+    }
+
+    pub fn flush(&mut self) -> Vec<String> {
+        // Nếu còn ký tự bình thường trong raw_pending và không nằm trong <think>
+        if !self.in_think && !self.raw_pending.is_empty() {
+            if !self.raw_pending.starts_with("<think") {
+                self.visible_buf.push_str(&self.raw_pending);
+            }
+            self.raw_pending.clear();
+        }
+
+        let mut out = self.extract_ready_sentences();
+        let rem = self.visible_buf.trim().to_string();
+        self.visible_buf.clear();
+        if !rem.is_empty() {
+            out.push(rem);
+        }
+        out
+    }
+
+    fn consume_think_tags(&mut self) {
+        loop {
+            if self.in_think {
+                if let Some(end_pos) = self.raw_pending.find("</think>") {
+                    self.raw_pending.drain(..end_pos + "</think>".len());
+                    self.in_think = false;
+                } else {
+                    // Chỉ giữ lại tối đa 8 byte cuối phòng trường hợp "</think>" đang về dở
+                    if self.raw_pending.len() > 8 {
+                        let keep_from = self
+                            .raw_pending
+                            .char_indices()
+                            .rev()
+                            .take(8)
+                            .last()
+                            .map(|(idx, _)| idx)
+                            .unwrap_or(0);
+                        self.raw_pending.drain(..keep_from);
+                    }
+                    break;
+                }
+            } else if let Some(start_pos) = self.raw_pending.find("<think>") {
+                self.visible_buf.push_str(&self.raw_pending[..start_pos]);
+                self.raw_pending.drain(..start_pos + "<think>".len());
+                self.in_think = true;
+            } else {
+                // Nếu đuôi chuỗi có thể là tiền tố của "<think>" (vd: "<thi"), giữ phần từ '<' trở đi
+                if let Some(lt_pos) = self.raw_pending.rfind('<') {
+                    let tail = &self.raw_pending[lt_pos..];
+                    if "<think>".starts_with(tail) {
+                        self.visible_buf.push_str(&self.raw_pending[..lt_pos]);
+                        self.raw_pending.drain(..lt_pos);
+                        break;
+                    }
+                }
+                self.visible_buf.push_str(&self.raw_pending);
+                self.raw_pending.clear();
+                break;
+            }
+        }
+    }
+
+    fn extract_ready_sentences(&mut self) -> Vec<String> {
+        let mut sentences = Vec::new();
+        loop {
+            let mut split_idx = None;
+            let chars: Vec<(usize, char)> = self.visible_buf.char_indices().collect();
+
+            for i in 0..chars.len() {
+                let (byte_idx, ch) = chars[i];
+                let is_boundary = match ch {
+                    '\n' => byte_idx >= 6,
+                    '!' | '?' | ';' => byte_idx >= 12,
+                    '.' => {
+                        let prev_digit = i > 0 && chars[i - 1].1.is_ascii_digit();
+                        let next_digit = i + 1 < chars.len() && chars[i + 1].1.is_ascii_digit();
+                        let next_is_space_or_nl =
+                            i + 1 < chars.len() && chars[i + 1].1.is_whitespace();
+                        !prev_digit && !next_digit && next_is_space_or_nl && byte_idx >= 18
+                    }
+                    _ => false,
+                };
+
+                if is_boundary {
+                    split_idx = Some(byte_idx + ch.len_utf8());
+                    break;
+                }
+            }
+
+            if let Some(idx) = split_idx {
+                let piece: String = self.visible_buf.drain(..idx).collect();
+                let trimmed = piece.trim().to_string();
+                if !trimmed.is_empty() {
+                    sentences.push(trimmed);
+                }
+            } else {
+                break;
+            }
+        }
+        sentences
+    }
+}
+
+impl Default for SentenceStreamSplitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_sentence_stream_splitter_think_and_decimals() {
+        let mut sp = SentenceStreamSplitter::new();
+        let mut collected = Vec::new();
+        for chunk in [
+            "<thi",
+            "nk>Đang suy luận nội bộ.</thi",
+            "nk>RAM hiện còn 3.5 GB trống. ",
+            "Hệ thống chạy rất mượt mà!",
+        ] {
+            collected.extend(sp.push(chunk));
+        }
+        collected.extend(sp.flush());
+        assert_eq!(
+            collected,
+            vec![
+                "RAM hiện còn 3.5 GB trống.",
+                "Hệ thống chạy rất mượt mà!"
+            ]
+        );
+    }
 
     #[test]
     fn test_sanitize_text_for_voice() {
@@ -8436,7 +8848,9 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
+use std::time::Duration;
 
 pub struct PiperTts {
     model_path: PathBuf,
@@ -8548,6 +8962,115 @@ impl PiperTts {
 
         // Vòng lặp chờ phát âm thanh xong hoặc bị ngắt lời (Barge-in)
         let res = wait_with_interrupt(&mut piper_child, &mut pw_play, state_mgr);
+
+        self.is_speaking.store(false, Ordering::SeqCst);
+        res
+    }
+
+    /// Đọc chuỗi câu đến từ kênh streaming qua 1 tiến trình piper + pw-cat duy nhất.
+    /// Chỉ khởi chạy tiến trình khi câu hợp lệ đầu tiên tới và hỗ trợ ngắt lời Barge-in tức thì.
+    pub fn speak_stream(
+        &self,
+        rx: Receiver<String>,
+        state_mgr: Option<&StateManager>,
+    ) -> bool {
+        if !self.is_available() {
+            eprintln!("⚠️ Piper binary hoặc model không tìm thấy: {:?}", self.model_path);
+            return false;
+        }
+
+        self.is_speaking.store(true, Ordering::SeqCst);
+
+        let mut active: Option<(Child, Child, std::process::ChildStdin)> = None;
+        let mut aborted = false;
+
+        loop {
+            if let Some(mgr) = state_mgr {
+                if mgr.is_interrupted() {
+                    aborted = true;
+                    break;
+                }
+            }
+
+            match rx.recv_timeout(Duration::from_millis(30)) {
+                Ok(sentence) => {
+                    let clean = sanitize_text_for_voice(&sentence);
+                    if clean.is_empty() {
+                        continue;
+                    }
+
+                    if active.is_none() {
+                        let pw_play = match Command::new("pw-cat")
+                            .args([
+                                "-p", "--raw", "--rate", "22050", "--channels", "1", "--format",
+                                "s16", "-",
+                            ])
+                            .stdin(Stdio::piped())
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .spawn()
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("Không thể khởi chạy pw-cat: {}", e);
+                                aborted = true;
+                                break;
+                            }
+                        };
+
+                        let mut pw_play = pw_play;
+                        let pw_stdin = pw_play.stdin.take().expect("pw-cat stdin");
+
+                        let mut piper_child = match Command::new(&self.piper_bin)
+                            .args([
+                                "--model",
+                                self.model_path.to_str().unwrap_or_default(),
+                                "--espeak_data",
+                                self.espeak_data.to_str().unwrap_or_default(),
+                                "--output_raw",
+                            ])
+                            .stdin(Stdio::piped())
+                            .stdout(pw_stdin)
+                            .stderr(Stdio::null())
+                            .spawn()
+                        {
+                            Ok(c) => c,
+                            Err(e) => {
+                                eprintln!("Không thể khởi chạy piper: {}", e);
+                                let _ = pw_play.kill();
+                                aborted = true;
+                                break;
+                            }
+                        };
+
+                        let piper_stdin = piper_child.stdin.take().expect("piper stdin");
+                        active = Some((piper_child, pw_play, piper_stdin));
+                    }
+
+                    if let Some((_, _, ref mut stdin)) = active {
+                        if writeln!(stdin, "{}", clean).is_err() || stdin.flush().is_err() {
+                            aborted = true;
+                            break;
+                        }
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
+        let res = if let Some((mut piper, mut player, stdin)) = active {
+            drop(stdin); // Đóng stdin để Piper đọc nốt câu cuối rồi thoát sạch
+            if aborted {
+                let _ = piper.kill();
+                let _ = player.kill();
+                false
+            } else {
+                wait_with_interrupt(&mut piper, &mut player, state_mgr)
+            }
+        } else {
+            !aborted
+        };
 
         self.is_speaking.store(false, Ordering::SeqCst);
         res

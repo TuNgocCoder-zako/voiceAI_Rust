@@ -77,3 +77,92 @@ impl Default for MemoryManager {
         Self::new()
     }
 }
+
+use crate::ai::ChatMessage;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+/// Bộ nhớ ngữ cảnh hội thoại ngắn hạn (trượt N tin nhắn gần nhất, tự hết hạn theo TTL)
+pub struct ConversationHistory {
+    messages: VecDeque<ChatMessage>,
+    max_messages: usize,
+    ttl: Duration,
+    last_updated: Option<Instant>,
+}
+
+impl ConversationHistory {
+    pub fn new(max_turns: usize, ttl_secs: u64) -> Self {
+        Self {
+            messages: VecDeque::with_capacity(max_turns * 2),
+            max_messages: max_turns * 2,
+            ttl: Duration::from_secs(ttl_secs),
+            last_updated: None,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.last_updated = None;
+    }
+
+    fn expire_if_stale(&mut self) {
+        if let Some(last) = self.last_updated {
+            if last.elapsed() > self.ttl {
+                self.messages.clear();
+                self.last_updated = None;
+            }
+        }
+    }
+
+    pub fn build_messages(&mut self, system_prompt: &str, current_prompt: &str) -> Vec<ChatMessage> {
+        self.expire_if_stale();
+        let mut out = Vec::with_capacity(self.messages.len() + 2);
+        out.push(ChatMessage {
+            role: "system".to_string(),
+            content: system_prompt.to_string(),
+        });
+        for m in &self.messages {
+            out.push(m.clone());
+        }
+        out.push(ChatMessage {
+            role: "user".to_string(),
+            content: current_prompt.to_string(),
+        });
+        out
+    }
+
+    pub fn push_turn(&mut self, user_msg: &str, assistant_msg: &str) {
+        self.expire_if_stale();
+        self.messages.push_back(ChatMessage {
+            role: "user".to_string(),
+            content: user_msg.to_string(),
+        });
+        self.messages.push_back(ChatMessage {
+            role: "assistant".to_string(),
+            content: assistant_msg.to_string(),
+        });
+        while self.messages.len() > self.max_messages {
+            self.messages.pop_front();
+        }
+        self.last_updated = Some(Instant::now());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_conversation_history_sliding_window() {
+        let mut hist = ConversationHistory::new(2, 120);
+        hist.push_turn("Câu 1", "Đáp 1");
+        hist.push_turn("Câu 2", "Đáp 2");
+        hist.push_turn("Câu 3", "Đáp 3");
+
+        let msgs = hist.build_messages("SYS", "Câu 4");
+        // 1 system + 4 history (Câu 2, Đáp 2, Câu 3, Đáp 3) + 1 current user = 6
+        assert_eq!(msgs.len(), 6);
+        assert_eq!(msgs[1].content, "Câu 2");
+        assert_eq!(msgs[5].content, "Câu 4");
+    }
+}

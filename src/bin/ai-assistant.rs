@@ -1,19 +1,20 @@
 use clap::Parser;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::mpsc;
 use voice_ai::audio::{
     detect_wake_word, AudioRecorder, OpenWakeWordDetector, SileroVad, WhisperEngine,
 };
 use voice_ai::config::Config;
+use voice_ai::core::memory::ConversationHistory;
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::core::nlu::router::TIMER_MANAGER;
 use voice_ai::core::state::{AssistantState, StateManager};
 use voice_ai::ipc::client::{send_ipc_command, send_ipc_command_with_options};
 use voice_ai::ipc::server::{ActionRequest, IpcServer};
-use voice_ai::speech::{play_chime, ChimeType, PiperTts};
+use voice_ai::speech::{play_chime, ChimeType, PiperTts, SentenceStreamSplitter};
 use voice_ai::tools::apps::{build_app_index, DesktopApp};
 use voice_ai::tools::system::is_media_playing;
 
@@ -177,6 +178,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &config.model,
     ));
     let model_router = Arc::new(voice_ai::ai::ModelRouter::new(&config.ollama_url));
+    let history = Arc::new(Mutex::new(ConversationHistory::new(3, 120)));
 
     // 3. Single Query Execution (đã vá lỗi Double Execution)
     if let Some(q) = args.query {
@@ -215,6 +217,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 args.deep,
                 &model_router,
                 &ollama,
+                &history,
                 &config,
                 &tts,
                 None,
@@ -227,6 +230,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 4. Dedicated Hands-Free Wake Word Mode
     if args.wake_word {
+        if let Err(e) = whisper.preload() {
+            eprintln!("⚠️ Chưa nạp sẵn được Whisper RAM: {}", e);
+        }
         let wake_whisper = Arc::new(WhisperEngine::fast_wake_engine());
         let state_manager = StateManager::new();
         TIMER_MANAGER.spawn_watcher(tts.clone(), state_manager.clone());
@@ -238,6 +244,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             app_index.clone(),
             model_router.clone(),
             ollama.clone(),
+            history.clone(),
             config.clone(),
             tts.clone(),
             state_manager,
@@ -261,12 +268,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if samples.len() < 3200 {
                         continue;
                     }
-                    let temp_wav = "/tmp/voice_input.wav";
-                    if AudioRecorder::save_wav(&samples, temp_wav, 16000).is_ok() {
-                        println!("⏳ Đang nhận diện qua Whisper...");
-                        let start_stt = Instant::now();
-                        match whisper.transcribe_wav(temp_wav) {
-                            Ok(user_text) => {
+                    println!("⏳ Đang nhận diện qua Whisper...");
+                    let start_stt = Instant::now();
+                    match whisper.transcribe_samples(&samples) {
+                        Ok(user_text) => {
                                 let stt_time = start_stt.elapsed();
                                 let trimmed = user_text.trim();
                                 if trimmed.is_empty() {
@@ -293,6 +298,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     args.model.as_deref(),
                                     &model_router,
                                     &ollama,
+                                    &history,
                                     &config,
                                     &tts,
                                     None,
@@ -302,7 +308,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Err(e) => eprintln!("Lỗi STT: {}", e),
                         }
                     }
-                }
                 Err(e) => {
                     eprintln!("Lỗi thu âm: {}", e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -356,6 +361,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     args.deep,
                     &model_router,
                     &ollama,
+                    &history,
                     &config,
                     &tts,
                     None,
@@ -370,6 +376,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 7. Default: Run Daemon & IPC Server with Integrated Hands-Free Wake Word + Timer Watcher
     println!("🌟 Khởi chạy Voice AI Assistant Daemon (Rust Core v2.5.0)...");
     ensure_mic_levels();
+    if let Err(e) = whisper.preload() {
+        eprintln!("⚠️ Chưa nạp sẵn được Whisper RAM: {}", e);
+    }
     println!("🎧 Đang túc trực lắng nghe từ khóa: 'Alexa', 'Trợ lý ơi', 'Hey Jarvis'...");
     let state_manager = StateManager::new();
     let (action_tx, mut action_rx) = mpsc::channel::<ActionRequest>(64);
@@ -399,6 +408,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ww_app_index = app_index.clone();
     let ww_router = model_router.clone();
     let ww_ollama = ollama.clone();
+    let ww_history = history.clone();
     let ww_config = config.clone();
     let ww_tts = tts.clone();
     let ww_state_mgr = state_manager.clone();
@@ -417,6 +427,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ww_app_index,
                 ww_router,
                 ww_ollama,
+                ww_history,
                 ww_config,
                 ww_tts,
                 ww_state_mgr,
@@ -484,6 +495,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let router_clone = model_router.clone();
                 let ollama_clone = ollama.clone();
                 let cfg_clone = config.clone();
+                let history_clone = history.clone();
 
                 tokio::spawn(async move {
                     state_mgr
@@ -533,6 +545,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             deep,
                             &router_clone,
                             &ollama_clone,
+                            &history_clone,
                             &cfg_clone,
                             &tts_clone,
                             Some(&state_mgr),
@@ -637,6 +650,7 @@ async fn capture_and_handle_followup(
     app_index: &Arc<HashMap<String, DesktopApp>>,
     model_router: &Arc<voice_ai::ai::ModelRouter>,
     ollama: &Arc<voice_ai::ai::OllamaClient>,
+    history: &Arc<Mutex<ConversationHistory>>,
     config: &Config,
     tts: &Arc<PiperTts>,
     state_manager: &StateManager,
@@ -678,42 +692,44 @@ async fn capture_and_handle_followup(
                 }
                 return;
             }
-            let followup_wav = "/tmp/voice_input.wav";
-            if AudioRecorder::save_wav(&followup_samples, followup_wav, 16000).is_ok() {
-                state_manager
-                    .set_state_full(
-                        AssistantState::Thinking,
-                        Some("Đang nhận diện giọng nói...".to_string()),
-                        None,
-                    )
-                    .await;
-                let stt_res = query_whisper
-                    .transcribe_wav(followup_wav)
-                    .map_err(|e| e.to_string());
-                if let Ok(followup_text) = stt_res {
-                    let q = followup_text.trim();
-                    if !q.is_empty() {
-                        println!("👤 Bạn: \"{}\"", q);
-                        state_manager
-                            .set_state_full(
-                                AssistantState::Thinking,
-                                Some("Đang xử lý...".to_string()),
-                                Some(q.to_string()),
-                            )
-                            .await;
-                        execute_voice_command(
-                            q,
-                            app_index,
-                            model_override,
-                            model_router,
-                            ollama,
-                            config,
-                            tts,
-                            Some(state_manager),
+
+            state_manager
+                .set_state_full(
+                    AssistantState::Thinking,
+                    Some("Đang nhận diện giọng nói...".to_string()),
+                    None,
+                )
+                .await;
+
+            let stt_start = Instant::now();
+            let stt_res = query_whisper
+                .transcribe_samples(&followup_samples)
+                .map_err(|e| e.to_string());
+
+            if let Ok(followup_text) = stt_res {
+                let q = followup_text.trim();
+                if !q.is_empty() {
+                    println!("👤 Bạn ({:.2?}): \"{}\"", stt_start.elapsed(), q);
+                    state_manager
+                        .set_state_full(
+                            AssistantState::Thinking,
+                            Some("Đang xử lý...".to_string()),
+                            Some(q.to_string()),
                         )
                         .await;
-                        return;
-                    }
+                    execute_voice_command(
+                        q,
+                        app_index,
+                        model_override,
+                        model_router,
+                        ollama,
+                        history,
+                        config,
+                        tts,
+                        Some(state_manager),
+                    )
+                    .await;
+                    return;
                 }
             }
             if !state_manager.has_manual_trigger() {
@@ -737,6 +753,7 @@ async fn run_wake_word_loop(
     app_index: Arc<HashMap<String, DesktopApp>>,
     model_router: Arc<voice_ai::ai::ModelRouter>,
     ollama: Arc<voice_ai::ai::OllamaClient>,
+    history: Arc<Mutex<ConversationHistory>>,
     config: Config,
     tts: Arc<PiperTts>,
     state_manager: StateManager,
@@ -775,6 +792,7 @@ async fn run_wake_word_loop(
                 &app_index,
                 &model_router,
                 &ollama,
+                &history,
                 &config,
                 &tts,
                 &state_manager,
@@ -855,6 +873,7 @@ async fn run_wake_word_loop(
                                         &app_index,
                                         &model_router,
                                         &ollama,
+                                        &history,
                                         &config,
                                         &tts,
                                         &state_manager,
@@ -913,6 +932,7 @@ async fn run_wake_word_loop(
                                     &app_index,
                                     &model_router,
                                     &ollama,
+                                    &history,
                                     &config,
                                     &tts,
                                     &state_manager,
@@ -934,6 +954,7 @@ async fn run_wake_word_loop(
                                     model_override.as_deref(),
                                     &model_router,
                                     &ollama,
+                                    &history,
                                     &config,
                                     &tts,
                                     Some(&state_manager),
@@ -955,6 +976,7 @@ async fn execute_voice_command(
     model_override: Option<&str>,
     model_router: &Arc<voice_ai::ai::ModelRouter>,
     ollama: &Arc<voice_ai::ai::OllamaClient>,
+    history: &Arc<Mutex<ConversationHistory>>,
     config: &Config,
     tts: &Arc<PiperTts>,
     state_manager: Option<&StateManager>,
@@ -1005,6 +1027,7 @@ async fn execute_voice_command(
             false,
             model_router,
             ollama,
+            history,
             config,
             tts,
             state_manager,
@@ -1020,6 +1043,7 @@ async fn execute_llm_query(
     force_deep: bool,
     router: &Arc<voice_ai::ai::ModelRouter>,
     ollama: &Arc<voice_ai::ai::OllamaClient>,
+    history: &Arc<Mutex<ConversationHistory>>,
     config: &Config,
     tts: &Arc<PiperTts>,
     state_manager: Option<&StateManager>,
@@ -1043,25 +1067,81 @@ async fn execute_llm_query(
         role.label()
     );
 
-    let messages = vec![
-        voice_ai::ai::ChatMessage {
-            role: "system".to_string(),
-            content: voice_ai::ai::ollama::SYSTEM_PROMPT.to_string(),
-        },
-        voice_ai::ai::ChatMessage {
-            role: "user".to_string(),
-            content: prompt.to_string(),
-        },
-    ];
+    let messages = {
+        let mut hist = history.lock().unwrap();
+        hist.build_messages(voice_ai::ai::ollama::SYSTEM_PROMPT, prompt)
+    };
 
-    match ollama
+    // Mở luồng TTS song song để đọc ngay câu đầu tiên khi Ollama vừa sinh xong dấu chấm
+    let mut tts_tx_opt: Option<std::sync::mpsc::Sender<String>> = None;
+    let mut tts_handle: Option<tokio::task::JoinHandle<bool>> = None;
+
+    if speak && tts.is_available() {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let tts_bg = tts.clone();
+        let mgr_bg = state_manager.cloned();
+        let handle = tokio::task::spawn_blocking(move || tts_bg.speak_stream(rx, mgr_bg.as_ref()));
+        tts_tx_opt = Some(tx);
+        tts_handle = Some(handle);
+    }
+
+    let mut splitter = SentenceStreamSplitter::new();
+    let mut visible_acc = String::new();
+    let prompt_owned = prompt.to_string();
+
+    let stream_res = ollama
         .chat_with_options(Some(&target_model), messages, Some(options), |chunk| {
             print!("{}", chunk);
             let _ = io::stdout().flush();
+
+            if let Some(mgr) = state_manager {
+                if mgr.is_interrupted() {
+                    tts_tx_opt = None; // Đóng kênh TTS ngay khi có tín hiệu ngắt
+                    return;
+                }
+            }
+
+            let ready_sentences = splitter.push(chunk);
+            for sent in ready_sentences {
+                if !visible_acc.is_empty() {
+                    visible_acc.push(' ');
+                }
+                visible_acc.push_str(&sent);
+
+                if let Some(ref tx) = tts_tx_opt {
+                    let _ = tx.send(sent);
+                }
+
+                // Cập nhật Dynamic Island ngay khi có câu đầu tiên
+                if let Some(mgr) = state_manager {
+                    let mgr_c = mgr.clone();
+                    let text_snap = visible_acc.clone();
+                    let q_snap = prompt_owned.clone();
+                    tokio::spawn(async move {
+                        mgr_c
+                            .set_state_full(AssistantState::Speaking, Some(text_snap), Some(q_snap))
+                            .await;
+                    });
+                }
+            }
         })
         .await
-        .map_err(|e| e.to_string())
-    {
+        .map_err(|e| e.to_string());
+
+    // Xả nốt câu cuối còn nằm trong splitter
+    for last_sent in splitter.flush() {
+        if !visible_acc.is_empty() {
+            visible_acc.push(' ');
+        }
+        visible_acc.push_str(&last_sent);
+        if let Some(ref tx) = tts_tx_opt {
+            let _ = tx.send(last_sent);
+        }
+    }
+    // Đóng kênh để Piper biết đã hết câu và tự hoàn tất phát âm
+    drop(tts_tx_opt);
+
+    match stream_res {
         Ok(raw_reply) => {
             println!();
             let (_thought, mut clean_reply) = voice_ai::ai::filter_thinking_content(&raw_reply);
@@ -1069,6 +1149,12 @@ async fn execute_llm_query(
                 clean_reply =
                     "Dạ, tôi chưa tổng hợp kịp câu trả lời. Bạn hỏi lại ngắn gọn hơn giúp tôi nhé."
                         .to_string();
+            }
+
+            // Lưu vào bộ nhớ hội thoại cho các câu hỏi nối tiếp
+            {
+                let mut hist = history.lock().unwrap();
+                hist.push_turn(prompt, &clean_reply);
             }
 
             if let Some(mgr) = state_manager {
@@ -1080,14 +1166,8 @@ async fn execute_llm_query(
                 .await;
             }
 
-            if speak && tts.is_available() {
-                let tts_bg = tts.clone();
-                let rep_bg = clean_reply.clone();
-                let mgr_bg = state_manager.cloned();
-                let _ = tokio::task::spawn_blocking(move || {
-                    tts_bg.speak(&rep_bg, mgr_bg.as_ref());
-                })
-                .await;
+            if let Some(handle) = tts_handle {
+                let _ = handle.await;
             }
 
             if let Some(mgr) = state_manager {
@@ -1097,6 +1177,9 @@ async fn execute_llm_query(
             }
         }
         Err(err_msg) => {
+            if let Some(handle) = tts_handle {
+                let _ = handle.await;
+            }
             let msg = format!(
                 "Dạ, hiện tại dịch vụ Ollama chưa thể xử lý mô hình '{}': {}",
                 target_model, err_msg
