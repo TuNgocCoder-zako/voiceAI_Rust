@@ -21,17 +21,17 @@ impl WakeWordType {
 
 // Regex trên chuỗi đã chuẩn hóa bỏ dấu tiếng Việt (lowercase)
 // Bao quát toàn diện các biến thể ngữ âm học mà Whisper thường nhận diện khi người Việt gọi:
-// Alexa, Alex, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, Được xe, Tuyệt sợi...
+// Alexa, Alex, Alessia, A lếch, A léc, A lek, A lếch xa, A léc xa, 2 xa, Hai xa, Ai xa, A xa, A lê sạch, A lai xa...
 static UNACCENTED_ALEXA_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik|lai|lay)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*(?:le|lech|lec)\s*[-_]?\s*(?:xa|sa|ca|sach|say)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:alexa|alecxa|aleksa|alex|alec|alek|alisa|elisa|alipsa|alipxa|alica|alicka|alixa|alessia|alesia|aleccia|alesa|(?:a|e|o)\s*[-_]?\s*(?:lech|lec|lek|let|les|lip|lich|lic|lik|lai|lay)(?:\s*[-_]?\s*(?:xa|sa|ca))?|(?:a|e)\s*[-_]?\s*(?:le|lech|lec)\s*[-_]?\s*(?:xa|sa|ca|sach|say)|(?:2|hai|ai|ay|a|e)\s*[-_]?\s*(?:xa|sa)|tuyet\s*(?:soi|so|sa|xoi|xa)))\b").unwrap()
 });
 
 static UNACCENTED_JARVIS_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:jarvis|za\s*vit|gia\s*vit|da\s*vit|za-vit|gia-vit))\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+|he\s+)?(?:jarvis|za\s*vit|gia\s*vit|da\s*vit|za-vit|gia-vit|da\s*ria|gia\s*ria|cha\s*vit|tra\s*vit|ha\s*vit))\b").unwrap()
 });
 
 static UNACCENTED_ASSISTANT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro|cho)\s*(?:ly|lay)\s*(?:oi|o|a|e|ha|nhe|nao)|(?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)(?:tro\s*ly|cho\s*ly|cho\s*lay)|(?:em|ban|chi)\s*oi)\b").unwrap()
+    Regex::new(r"(?i)\b((?:hey\s+|alo\s+|oi\s+|e\s+|nay\s+)?(?:tro|cho)\s*(?:ly|lay|li)(?:\s*(?:oi|o|a|e|ha|nhe|nao))?|(?:em|ban|chi)\s*oi)\b").unwrap()
 });
 
 static FILLER_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -62,13 +62,31 @@ pub fn detect_wake_word(text: &str) -> Option<(WakeWordType, String)> {
         return Some((WakeWordType::Jarvis, remainder));
     }
 
-    // 3. Kiểm tra Trợ lý ơi
+    // 3. Kiểm tra Trợ lý ơi / Trợ lý
     if let Some(m) = UNACCENTED_ASSISTANT_RE.find(&unaccented) {
         // Tránh tự kích hoạt lặp nếu câu chứa "trợ lý ảo" (TTS của bot tự xưng)
         let unacc_rem = unaccented[m.end()..].trim_start();
         if unacc_rem.starts_with("ao") {
             return None;
         }
+
+        // Nếu từ khóa nằm ở giữa/cuối câu dài (m.start() > 0):
+        // Chỉ chấp nhận nếu phía trước là từ gọi/chào (alo, hey, này, ê, ơi...)
+        // hoặc câu ngắn chỉ có 1-2 từ (vd: "Trợ lý", "Alo trợ lý")
+        let raw_words_count = raw.split_whitespace().count();
+        if m.start() > 0 && raw_words_count > 2 {
+            let prefix = unaccented[..m.start()].trim();
+            let is_greeting = prefix == "hey"
+                || prefix == "alo"
+                || prefix == "oi"
+                || prefix == "e"
+                || prefix == "nay"
+                || prefix == "chao";
+            if !is_greeting {
+                return None;
+            }
+        }
+
         let remainder = clean_remainder_by_unaccented(raw, &unaccented, m.start(), m.end());
         return Some((WakeWordType::Assistant, remainder));
     }
@@ -209,6 +227,8 @@ mod tests {
             ("A xa mở trình duyệt", "mở trình duyệt"),
             ("A lai xa mấy giờ rồi", "mấy giờ rồi"),
             ("A lê sạch", ""),
+            ("Alessia", ""),
+            ("Alessia mấy giờ rồi", "mấy giờ rồi"),
         ];
         for (input, expected_cmd) in cases {
             let r = detect_wake_word(input);
@@ -222,9 +242,12 @@ mod tests {
     #[test]
     fn test_detect_assistant() {
         let cases = [
+            ("Trợ lý", ""),
+            ("Trợ lý ơi", ""),
             ("Trợ lý ơi, kiểm tra pin", "kiểm tra pin"),
             ("Trợ lý ơ, mấy giờ rồi", "mấy giờ rồi"),
             ("Trợ lý à", ""),
+            ("Trợ lý mấy giờ rồi", "mấy giờ rồi"),
             ("chợ lấy ơi, mở visual studio code", "mở visual studio code"),
             ("Alo trợ lý", ""),
             ("Em ơi mấy giờ rồi", "mấy giờ rồi"),
@@ -240,11 +263,19 @@ mod tests {
 
     #[test]
     fn test_detect_jarvis() {
-        let res = detect_wake_word("Hey Jarvis, mở visual studio code");
-        assert!(res.is_some());
-        let (ww, cmd) = res.unwrap();
-        assert_eq!(ww, WakeWordType::Jarvis);
-        assert_eq!(cmd, "mở visual studio code");
+        let cases = [
+            ("Hey Jarvis, mở visual studio code", "mở visual studio code"),
+            ("Hey Jarvis", ""),
+            ("Đà rìa mấy giờ rồi", "mấy giờ rồi"),
+            ("Za vít", ""),
+        ];
+        for (input, expected_cmd) in cases {
+            let res = detect_wake_word(input);
+            assert!(res.is_some(), "Không nhận diện được jarvis từ '{}'", input);
+            let (ww, cmd) = res.unwrap();
+            assert_eq!(ww, WakeWordType::Jarvis);
+            assert_eq!(cmd, expected_cmd, "Sai cmd từ '{}'", input);
+        }
     }
 
     #[test]
@@ -254,5 +285,6 @@ mod tests {
         assert_eq!(detect_wake_word("Tôi là trợ lý ảo của bạn"), None);
         assert_eq!(detect_wake_word("giám đốc và trợ lý"), None);
         assert_eq!(detect_wake_word("Đây là trợ lý"), None);
+        assert_eq!(detect_wake_word("Tôi muốn gặp trợ lý"), None);
     }
 }

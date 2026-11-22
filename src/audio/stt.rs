@@ -98,6 +98,8 @@ impl WhisperEngine {
                 "vi",
                 "-nt",
                 "-np",
+                "-nf",
+                "--suppress-nst",
                 "-t",
                 &self.threads.to_string(),
             ])
@@ -135,8 +137,38 @@ fn is_hallucination(text: &str) -> bool {
     if t.is_empty() || t.len() < 2 {
         return true;
     }
-    if t == "." || t == ".." || t == "..." || t == "!" {
+    if t == "." || t == ".." || t == "..." || t == "!" || t == "?" {
         return true;
+    }
+
+    // Các ký hiệu âm thanh phụ của Whisper: (tiếng thở), [âm nhạc], *S*, (đóng hộng)...
+    if (t.starts_with('(') && t.ends_with(')'))
+        || (t.starts_with('[') && t.ends_with(']'))
+        || (t.starts_with('*') && t.ends_with('*'))
+        || t.eq_ignore_ascii_case("*s*")
+    {
+        return true;
+    }
+
+    let lower = t.to_lowercase();
+    // Lọc triệt để các câu ảo giác phụ đề YouTube từ mô hình Whisper khi mic yên tĩnh
+    const YOUTUBE_HALLUCINATIONS: &[&str] = &[
+        "video hấp dẫn",
+        "subscribe",
+        "đăng ký kênh",
+        "ghiền mình",
+        "cảm ơn các bạn",
+        "hẹn gặp lại",
+        "chúc các bạn",
+        "theo dõi kênh",
+        "nhấn chuông",
+        "like và share",
+        "đóng hộng",
+    ];
+    for &pattern in YOUTUBE_HALLUCINATIONS {
+        if lower.contains(pattern) {
+            return true;
+        }
     }
 
     let words: Vec<&str> = t.split_whitespace().collect();

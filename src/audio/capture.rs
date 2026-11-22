@@ -1,4 +1,4 @@
-use crate::audio::vad::SchmittTriggerVad;
+use crate::audio::vad::{HighPassFilter, SchmittTriggerVad};
 use crate::core::state::StateManager;
 use std::collections::VecDeque;
 use std::fs::File;
@@ -32,6 +32,7 @@ impl AudioRecorder {
         let mut preroll_buffer: VecDeque<Vec<i16>> = VecDeque::with_capacity(6);
         let mut recorded_chunks: Vec<Vec<i16>> = Vec::new();
         let mut ambient_rms_samples: Vec<f32> = Vec::new();
+        let mut hpf = HighPassFilter::new();
         let mut vad = SchmittTriggerVad::new();
 
         // Khởi chạy tiến trình pw-record (PipeWire)
@@ -88,24 +89,21 @@ impl AudioRecorder {
                 chunk.push(sample);
             }
 
+            // Lọc bỏ tiếng ù cơ học quạt tản nhiệt (< 100Hz)
+            hpf.process_in_place(&mut chunk);
+
             let rms = SchmittTriggerVad::compute_rms(&chunk);
 
-            // 4 khung đầu tiên dùng để đo độ ồn nền (Ambient Noise Calibration)
-            if i < 4 {
-                if rms < 0.035 {
-                    ambient_rms_samples.push(rms);
-                }
+            // 2 khung đầu tiên (200ms) dùng để ước lượng độ ồn nền nhanh
+            if i < 2 {
+                ambient_rms_samples.push(rms);
                 preroll_buffer.push_back(chunk);
                 if preroll_buffer.len() > 6 {
                     preroll_buffer.pop_front();
                 }
                 continue;
-            } else if i == 4 {
-                preroll_buffer.push_back(chunk);
-                if !ambient_rms_samples.is_empty() {
-                    vad.calibrate(&ambient_rms_samples);
-                }
-                continue;
+            } else if i == 2 {
+                vad.calibrate(&ambient_rms_samples);
             }
 
             let (has_spoken, should_stop) = vad.process_frame(rms, 100);
@@ -138,8 +136,8 @@ impl AudioRecorder {
         let _ = child.kill();
         let _ = child.wait();
 
-        // Nếu người dùng nói dưới 250ms (chỉ là tiếng click chuột, ho nhẹ hoặc tiếng gõ phím)
-        if vad.spoken_duration_ms < 250 {
+        // Nếu người dùng nói dưới 180ms (chỉ là tiếng click chuột hoặc gõ phím)
+        if vad.spoken_duration_ms < 180 {
             return Ok(Vec::new());
         }
 
@@ -150,7 +148,7 @@ impl AudioRecorder {
         }
 
         let max_abs = full_samples.iter().map(|&s| s.abs()).max().unwrap_or(0);
-        if max_abs < 900 {
+        if max_abs < 400 {
             // Âm lượng quá nhỏ dưới ngưỡng nghe được, bỏ qua
             return Ok(Vec::new());
         }

@@ -302,6 +302,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 7. Default: Run Daemon & IPC Server with Integrated Hands-Free Wake Word!
     println!("🌟 Khởi chạy Voice AI Assistant Daemon (Rust Core v2.5.0)...");
+    ensure_mic_levels();
     println!("🎧 Đang túc trực lắng nghe từ khóa: 'Alexa', 'Trợ lý ơi', 'Hey Jarvis'...");
     let state_manager = StateManager::new();
     let (action_tx, mut action_rx) = mpsc::channel::<ActionRequest>(64);
@@ -551,6 +552,9 @@ async fn run_wake_word_loop(
                                     Some("Đang lắng nghe...".to_string()),
                                     None,
                                 ).await;
+
+                                // Chờ tiếng chime phát xong (250ms) để mic không thu lại tiếng chime của loa
+                                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
 
                                 let followup_res = recorder.record(8.0, None).map_err(|e| e.to_string());
                                 match followup_res {
@@ -824,4 +828,13 @@ fn is_exit_phrase(text: &str) -> bool {
         "tắt trợ lý", "đóng trợ lý", "thôi im", "im lặng", "hẹn gặp lại", "tạm biệt nhé"
     ];
     exits.iter().any(|&e| t == e || t.starts_with(e) || t.ends_with(e))
+}
+
+fn ensure_mic_levels() {
+    let _ = std::process::Command::new("amixer")
+        .args(["-c", "0", "sset", "Internal Mic Boost", "1"])
+        .output();
+    let _ = std::process::Command::new("amixer")
+        .args(["-c", "0", "sset", "Capture", "75%"])
+        .output();
 }
