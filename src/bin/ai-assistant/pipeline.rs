@@ -1,7 +1,7 @@
 use super::context::AppContext;
 use std::io::{self, Write};
 use std::time::Instant;
-use voice_ai::audio::SileroVad;
+use voice_ai::audio::{AudioRecorder, SileroVad};
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::core::state::AssistantState;
 use voice_ai::speech::{play_chime, ChimeType, SentenceStreamSplitter};
@@ -76,6 +76,7 @@ pub async fn capture_and_handle_followup(
                 .await;
 
             let stt_start = Instant::now();
+            let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
             let stt_res = ctx
                 .whisper
                 .transcribe_samples(&followup_samples)

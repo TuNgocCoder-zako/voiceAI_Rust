@@ -156,7 +156,7 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         (r"(?i)\b(?:gour\s*miel|gourmiel|gour\s*meo|gour\s*mail)\b", "gmail"),
         (r"(?i)\b(?:g[ií]t\s*(?:h[uú]p|h[aá]p|hub|hup|hap|h[uú]c|h[oó]p|h[oớ]p|h[aặ]p)|gít\s*húp|gh)\b", "github"),
         (r"(?i)\b(?:ph[âe]y\s*(?:b[uú][ckpt]|book|booc|bô|bô\s*k)?|phe\s*b[uú][ckpt]|fb|phai\s*bước)\b", "facebook"),
-        (r"(?i)\b(?:du\s*túp|dút\s*túp|diu\s*túp|diu\s*tup|du\s*tup|dút\s*tup|iu\s*túp|iu\s*tup|du\s*tốc|dưu\s*tốc|diu\s*tốc|vô\s*tấp|vô\s*túp|dô\s*túp|dô\s*tấp|zu\s*túp)\b", "youtube"),
+        (r"(?i)\b(?:du\s*túp|dút\s*túp|diu\s*túp|diu\s*tup|du\s*tup|dút\s*tup|iu\s*túp|iu\s*tup|du\s*tốc|dưu\s*tốc|diu\s*tốc|vô\s*tấp|vô\s*túp|dô\s*túp|dô\s*tấp|zu\s*túp|giữ\s*tập|giu\s*tập|du\s*tập|diu\s*tập)\b", "youtube"),
         (r"(?i)\b(?:da\s*lô|za\s*lô|dép\s*lào)\b", "zalo"),
         (r"(?i)\b(?:spotfy|spoty|spotifi|supportify|xì\s*po\s*ti\s*phai|sì\s*po\s*ti\s*phai|bót\s*ti\s*phai|sờ\s*po\s*ti)\b", "spotify"),
         (r"(?i)\b(?:téc\s*mi\s*nan|tẹc\s*mi\s*nan|tẹt\s*mi\s*nan|téc\s*min\s*nồ)\b", "terminal"),
@@ -167,6 +167,8 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         (r"(?i)\b(?:vi\s*ét\s*cốt|vi\s*ét\s*code|vê\s*ét\s*cốt|vé\s*code|vét\s*cốt|phi\s*ét\s*cốt)\b", "vs code"),
         (r"(?i)\b(?:phai|fai|phay|fay|phi|pha|fire|file)[-\s]*(?:fox|fóc|phóc|phốc|phót|phó|phọt|phốt|phot|phoc|phóp|pho)\b", "firefox"),
         (r"(?i)\b(?:cáo\s*lửa|cáo\s*đỏ|hỏa\s*hồ)\b", "firefox"),
+        // Chuẩn hóa "má / mà" -> "mở" CHỈ KHI đứng ngay trước tên app/web phổ biến
+        (r"(?i)\b(?:má|mà|mả|mã)\s+(youtube|facebook|google|gmail|github|zalo|spotify|chrome|firefox|vs\s*code|terminal)\b", "mở $1"),
         // Whisper hearing "Firefox" as "5 phút"
         (r"(?i)\b(?:mở|bật|chạy|vào|khởi động)\s+(?:5\s*phút|năm\s*phút|một\s*5\s*phút|1\s*5\s*phút|5p|năm\s*p|5\s*phúc|năm\s*phúc)\b", "mở firefox"),
         // Âm lượng & độ sáng
@@ -254,5 +256,6 @@ mod tests {
         assert_eq!(clean_user_input("tang am luong"), "tăng âm lượng");
         assert_eq!(clean_user_input("dong cua so"), "đóng cửa sổ");
         assert_eq!(clean_user_input("m ở visual studio code"), "mở visual studio code");
+        assert_eq!(clean_user_input("Má giữ tập"), "mở youtube");
     }
 }

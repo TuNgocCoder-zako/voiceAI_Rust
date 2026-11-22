@@ -2,7 +2,7 @@ use crate::audio::vad::{HighPassFilter, SchmittTriggerVad, SileroVad};
 use crate::core::state::StateManager;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use ringbuf::traits::{Consumer, Producer, Split};
-use ringbuf::{HeapCons, HeapRb};
+use ringbuf::{HeapCons, HeapProd, HeapRb};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
@@ -127,82 +127,95 @@ impl ContinuousAudioStream {
                 };
 
                 let sample_format = supported_config.sample_format();
-                let stream_config: cpal::StreamConfig = supported_config.into();
-                let native_rate = stream_config.sample_rate.0;
-                let channels = (stream_config.channels as usize).max(1);
-
-                // Bộ đệm vòng chứa tối đa 3 giây âm thanh mono ở tần số gốc
-                let rb = HeapRb::<f32>::new((native_rate as usize) * 3);
-                let (mut prod, cons) = rb.split();
+                let fallback_config: cpal::StreamConfig = supported_config.into();
+                let preferred_config = cpal::StreamConfig {
+                    channels: 1,
+                    sample_rate: cpal::SampleRate(TARGET_SAMPLE_RATE),
+                    buffer_size: cpal::BufferSize::Default,
+                };
 
                 let err_fn = |err| {
                     eprintln!("⚠️ Lỗi luồng âm thanh cpal: {}", err);
                 };
 
-                let stream_res = match sample_format {
-                    cpal::SampleFormat::F32 => device.build_input_stream(
-                        &stream_config,
-                        move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                            if channels == 1 {
-                                for &s in data {
-                                    let _ = prod.try_push(s);
+                // Thử mở thẳng 16kHz Mono trước; nếu thiết bị không hỗ trợ mới dùng fallback_config
+                let build_for = |cfg: &cpal::StreamConfig, mut prod: HeapProd<f32>| {
+                    let ch = (cfg.channels as usize).max(1);
+                    match sample_format {
+                        cpal::SampleFormat::F32 => device.build_input_stream(
+                            cfg,
+                            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                                if ch == 1 {
+                                    for &s in data {
+                                        let _ = prod.try_push(s);
+                                    }
+                                } else {
+                                    // Chỉ lấy kênh 0 để tránh triệt tiêu pha trên mic stereo laptop ASUS
+                                    for frame in data.chunks_exact(ch) {
+                                        let _ = prod.try_push(frame[0]);
+                                    }
                                 }
-                            } else {
-                                // Chỉ lấy kênh 0 để tránh triệt tiêu pha trên mic stereo laptop ASUS
-                                for frame in data.chunks_exact(channels) {
-                                    let _ = prod.try_push(frame[0]);
+                            },
+                            err_fn,
+                            None,
+                        ),
+                        cpal::SampleFormat::I16 => device.build_input_stream(
+                            cfg,
+                            move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                                let inv = 1.0 / 32768.0;
+                                if ch == 1 {
+                                    for &s in data {
+                                        let _ = prod.try_push(s as f32 * inv);
+                                    }
+                                } else {
+                                    for frame in data.chunks_exact(ch) {
+                                        let _ = prod.try_push(frame[0] as f32 * inv);
+                                    }
                                 }
-                            }
-                        },
-                        err_fn,
-                        None,
-                    ),
-                    cpal::SampleFormat::I16 => device.build_input_stream(
-                        &stream_config,
-                        move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                            let inv = 1.0 / 32768.0;
-                            if channels == 1 {
-                                for &s in data {
-                                    let _ = prod.try_push(s as f32 * inv);
+                            },
+                            err_fn,
+                            None,
+                        ),
+                        cpal::SampleFormat::U16 => device.build_input_stream(
+                            cfg,
+                            move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                                if ch == 1 {
+                                    for &s in data {
+                                        let _ = prod.try_push((s as f32 / 32768.0) - 1.0);
+                                    }
+                                } else {
+                                    for frame in data.chunks_exact(ch) {
+                                        let _ = prod.try_push((frame[0] as f32 / 32768.0) - 1.0);
+                                    }
                                 }
-                            } else {
-                                for frame in data.chunks_exact(channels) {
-                                    let _ = prod.try_push(frame[0] as f32 * inv);
-                                }
-                            }
-                        },
-                        err_fn,
-                        None,
-                    ),
-                    cpal::SampleFormat::U16 => device.build_input_stream(
-                        &stream_config,
-                        move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                            if channels == 1 {
-                                for &s in data {
-                                    let _ = prod.try_push((s as f32 / 32768.0) - 1.0);
-                                }
-                            } else {
-                                for frame in data.chunks_exact(channels) {
-                                    let _ = prod.try_push((frame[0] as f32 / 32768.0) - 1.0);
-                                }
-                            }
-                        },
-                        err_fn,
-                        None,
-                    ),
-                    other => Err(cpal::BuildStreamError::StreamConfigNotSupported).map_err(|_| {
-                        eprintln!("Định dạng mẫu âm thanh chưa hỗ trợ: {:?}", other);
-                        cpal::BuildStreamError::StreamConfigNotSupported
-                    }),
-                };
-
-                let stream = match stream_res {
-                    Ok(s) => s,
-                    Err(e) => {
-                        let _ = init_tx.send(Err(format!("Không mở được luồng cpal: {}", e)));
-                        return;
+                            },
+                            err_fn,
+                            None,
+                        ),
+                        _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
                     }
                 };
+
+                let rb_pref = HeapRb::<f32>::new((preferred_config.sample_rate.0 as usize) * 3);
+                let (prod_pref, cons_pref) = rb_pref.split();
+
+                let (stream, active_config, cons) = match build_for(&preferred_config, prod_pref) {
+                    Ok(s) => (s, preferred_config, cons_pref),
+                    Err(_) => {
+                        let rb_fb = HeapRb::<f32>::new((fallback_config.sample_rate.0 as usize) * 3);
+                        let (prod_fb, cons_fb) = rb_fb.split();
+                        match build_for(&fallback_config, prod_fb) {
+                            Ok(s) => (s, fallback_config, cons_fb),
+                            Err(e) => {
+                                let _ = init_tx.send(Err(format!("Không mở được luồng cpal: {}", e)));
+                                return;
+                            }
+                        }
+                    }
+                };
+
+                let native_rate = active_config.sample_rate.0;
+                let channels = (active_config.channels as usize).max(1);
 
                 if let Err(e) = stream.play() {
                     let _ = init_tx.send(Err(format!("Không chạy được luồng thu âm: {}", e)));

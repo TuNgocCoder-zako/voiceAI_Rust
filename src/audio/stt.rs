@@ -132,17 +132,25 @@ impl WhisperEngine {
             .create_state()
             .map_err(|e| format!("Không tạo được WhisperState: {:?}", e))?;
 
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        const WHISPER_PROMPT: &str = "Lệnh trợ lý ảo tiếng Việt trên Ubuntu: \
+            mở YouTube, mở Google Chrome, mở Firefox, mở Visual Studio Code, mở VS Code, \
+            mở Spotify, mở Facebook, mở GitHub, mở Zalo, mở Gmail, mở Terminal, \
+            tăng âm lượng, giảm âm lượng, tắt tiếng, tăng độ sáng, giảm độ sáng, \
+            mấy giờ rồi, hôm nay ngày mấy, kiểm tra pin, thời tiết hôm nay, hẹn giờ, chụp màn hình.";
+
+        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
+            beam_size: 2,
+            patience: -1.0,
+        });
         params.set_n_threads(self.threads as i32);
         params.set_language(Some("vi"));
         params.set_translate(false);
-        // Chống ảo giác phụ đề trên các lệnh thoại ngắn độc lập
+        params.set_initial_prompt(WHISPER_PROMPT);
         params.set_no_context(true);
         params.set_temperature(0.0);
-        params.set_temperature_inc(0.0); // Tương đương cờ -nf (--no-fallback)
+        params.set_temperature_inc(0.0);
         params.set_suppress_blank(true);
-        params.set_suppress_nst(true);   // Tương đương --suppress-nst
-        // Tắt toàn bộ log stdout của C++
+        params.set_suppress_nst(true);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
