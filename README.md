@@ -1,6 +1,6 @@
-# Voice AI - Native Rust Engine 🦀⚡
+# Voice AI - Native Rust Engine 🦀⚡ (v3.0)
 
-Hệ thống Trợ lý ảo AI cục bộ siêu tốc độ (Local Voice AI Assistant) viết bằng **Pure Rust**, phản hồi sub-microsecond với kiến trúc Fast-Path NLU, mô hình ngôn ngữ lớn Ollama tự động điều hướng, mô hình nhận diện giọng nói cục bộ Whisper.cpp, giọng đọc nơ-ron Piper TTS và giao diện đảo động Dynamic Island QML (Quickshell).
+Hệ thống Trợ lý ảo AI cục bộ siêu tốc độ (Local Voice AI Assistant) viết bằng **Pure Rust**, phản hồi sub-microsecond với kiến trúc Fast-Path NLU, mô hình ngôn ngữ lớn Ollama tự động điều hướng, mô hình nhận diện giọng nói cục bộ Whisper.cpp nạp sẵn trong RAM (`whisper-rs`), giọng đọc nơ-ron Piper TTS streaming và giao diện đảo động Dynamic Island QML (Quickshell).
 
 ---
 
@@ -9,33 +9,30 @@ Hệ thống Trợ lý ảo AI cục bộ siêu tốc độ (Local Voice AI Assi
 ### 1. ⚡ Bộ định tuyến ngôn ngữ tự nhiên (Fast-Path NLU)
 - **Tốc độ thực thi**: Đạt hơn **18,000 câu lệnh/giây**, độ trễ trung vị chỉ **~17 µs** (nhanh hơn Python x20 - x50 lần).
 - **Phân loại hai tầng (Two-Tier Routing)**:
-  - **Fast-Path**: Xử lý tức thì các câu lệnh điều khiển hệ thống (âm lượng, độ sáng màn hình, phần trăm pin, thời tiết, hẹn giờ, báo thức, ghi chú, chụp màn hình, mở ứng dụng, tìm kiếm Google/YouTube...).
+  - **Fast-Path**: Xử lý tức thì các câu lệnh điều khiển hệ thống (âm lượng, độ sáng màn hình, phần trăm pin, quạt tản nhiệt `powerprofilesctl`, thời tiết, hẹn giờ đổ chuông thật, báo thức, ghi chú, chụp màn hình Wayland/X11, mở ứng dụng Snap/Flatpak/Native, tìm kiếm Google/YouTube...).
   - **Deep-Path**: Tự động chuyển các câu hỏi kiến thức, lập trình, suy luận logic cho mô hình LLM qua Ollama.
 - **Chuẩn hóa tiếng Việt & Sửa dị âm Whisper**: Tự động bóc tách dấu, nhận diện các từ đồng âm mà mô hình Whisper phiên âm lệch (ví dụ: *"Mà youtube"* ➔ *"Mở YouTube"*).
 
-### 2. 🧠 Điều hướng LLM Đa Mô Hình (Dynamic Model Router)
+### 2. 🧠 Điều hướng LLM Đa Mô Hình & Streaming Piper TTS
 - **Tự động nhận diện (Model Discovery)**: Quét toàn bộ model có sẵn trong Ollama qua API `/api/tags` (tự động cache 30s).
 - **Điều hướng thông minh theo ngữ cảnh**:
   - ⚡ **Xã giao / Giao tiếp nhanh (Fast)**: Điều hướng tới `qwen3.8:2b` (hoặc các model 2B - 4B) để phản hồi trong 200 - 400ms.
   - 💻 **Lập trình & Kỹ thuật (Coder)**: Điều hướng tới `qwen2.5:latest` (Qwen2.5-Coder-7B).
-  - 🧠 **Suy luận sâu / Logic (Reasoning)**: Điều hướng tới `qwen3:4b-thinking` — tự động bóc tách và lọc bỏ thẻ suy nghĩ nội tâm `<think>...</think>` trước khi đưa vào giọng đọc TTS.
+  - 🧠 **Suy luận sâu / Logic (Reasoning)**: Hỗ trợ cờ `--deep` hoặc câu hỏi phức tạp — tự động bóc tách và lọc bỏ thẻ suy nghĩ nội tâm `<think>...</think>` trực tiếp trên luồng stream mà không bị ngắt số thập phân (`3.5 GB`).
+- **Streaming Ollama ➔ Piper TTS**: Tách câu theo thời gian thực (`SentenceStreamSplitter`) và đẩy trực tiếp vào 1 cặp tiến trình `piper` + `pw-cat` duy nhất, giúp trợ lý cất tiếng đọc câu đầu tiên sau ~1 giây.
+- **Bộ nhớ ngữ cảnh hội thoại (`ConversationHistory`)**: Giữ trượt 3 cặp hỏi-đáp gần nhất (tối đa 6 tin nhắn), tự động làm mới sau 120 giây im lặng.
 
-### 3. 🎧 Bộ xử lý Âm thanh DSP & Wake Word (Audio Pipeline)
-- **Bộ lọc thông cao Biquad High-Pass Filter (@ 100Hz)**: Triệt tiêu 100% tiếng rung cơ học 39 Hz từ quạt tản nhiệt laptop và dòng điện rò, giảm năng lượng ồn nền từ RMS 0.67 xuống **0.01** (trong trẻo, không vỡ tiếng).
-- **Chuẩn hóa phần cứng ALSA tự động**: Tự động ghim `Internal Mic Boost: 10 dB` và `Capture: 75%` khi khởi động daemon, chống hiện tượng clipping méo tiếng trên card Realtek ALC256.
-- **Nhận diện Từ khóa Đánh thức Rảnh tay (Hands-Free Wake Word)**:
-  - Hỗ trợ đa từ khóa: **`"Alexa"`**, **`"Trợ lý ơi"`**, **`"Hey Jarvis"`**.
-  - **Kháng dị âm ngữ âm tiếng Việt**: Nhận diện thông minh các từ Whisper phiên âm lệch do tiếng vang phòng hoặc mic xa (`"Lê xa"`, `"A LÊSÊ"`, `"Alessia"`, `"Cỡ lý ơi"`, `"Cô lấy"`, `"Đó lý"`, `"trò lấy"`, `"Hai Zavit"`, `"Đà rìa"`...).
-- **Bộ đệm chống nuốt âm (600ms Pre-Roll Circular Buffer)**: Lưu trước 600ms âm thanh vào bộ đệm vòng tròn, đảm bảo từ đầu tiên người dùng nói không bao giờ bị cắt cụt.
-- **Thời gian chờ linh hoạt (Adaptive Silence Timeout)**:
-  - Túc trực từ khóa: 2.2 giây.
-  - Chờ câu lệnh sau tiếng Ting: **4.5 giây** (cho phép người dùng thong thả suy nghĩ và phát âm câu lệnh mà không bị ngắt ngang).
+### 3. 🎧 Bộ xử lý Âm thanh DSP, WebRTC AEC & Wake Word
+- **PipeWire WebRTC AEC**: Tích hợp module WebRTC Echo Cancellation cấp hệ điều hành (`EchoCancel_Source` / `EchoCancel_Sink`), triệt tiêu 100% tiếng nhạc phát từ loa hoặc tiếng đọc của trợ lý lọt ngược vào mic.
+- **Luồng thu âm liên tục (`cpal` + `ringbuf`)**: Duy trì luồng micro nền suốt đời ứng dụng, kết hợp bộ Resampler (44.1k/48k ➔ 16kHz) và bộ lọc `HighPassFilter` 100Hz giữ trạng thái liên tục, triệt tiêu khoảng mù âm thanh và xung giật đầu luồng.
+- **Silero VAD v5 (ONNX CPU, khung 32ms)**: Nhận diện giọng nói chuẩn xác, không bị phím gõ cơ hay quạt gió cắt nhầm.
+- **openWakeWord 3 tầng ONNX (CPU, khung 80ms)**: Nhận diện từ khóa **`"Alexa"`**, **`"Hey Jarvis"`** với cơ chế Patience 2 khung (160ms), Dynamic Music Boost (+0.05 khi phát nhạc) và Cooldown 1.5s, chỉ tiêu thụ ~3–5% CPU và phản hồi dưới 100ms.
+- **STT Whisper Native RAM (`whisper-rs`)**: Nạp sẵn `WhisperContext` vào RAM một lần duy nhất lúc khởi động daemon, nhận diện thẳng mảng PCM i16, **loại bỏ 100% việc ghi file `/tmp/*.wav` ra ổ cứng**.
 
 ### 4. 🖥️ Giao diện Đảo Động Dynamic Island (Quickshell QML)
-- Giao diện Dynamic Island tuyệt đẹp viết bằng **QML** thông qua engine `quickshell` (`overlay/VoiceOverlay.qml`).
-- Cửa sổ dạng dock 32-bit ARGB trong suốt đặt chính giữa đáy màn hình (`+620+899`), hỗ trợ cả GNOME Wayland và X11.
-- Hiển thị trực quan trạng thái: *Sẵn sàng (Idle)*, *Đang lắng nghe (Listening)*, *Đang xử lý (Thinking)*, *Đang trả lời (Speaking)* cùng hiệu ứng sóng âm và thẻ phản hồi chữ.
-- **Không làm phiền**: Toàn bộ thông báo hệ thống `notify-send` đã được loại bỏ; câu trả lời hiển thị tinh gọn ngay trên Dynamic Island.
+- Giao diện Dynamic Island viết bằng **QML** thông qua engine `quickshell` (`overlay/VoiceOverlay.qml`).
+- Cửa sổ dạng dock 32-bit ARGB trong suốt đặt chính giữa đáy màn hình, hỗ trợ cả Ubuntu GNOME Wayland và X11.
+- Hiển thị trực quan trạng thái: *Sẵn sàng (Idle)*, *Đang lắng nghe (Listening)*, *Đang xử lý (Thinking)*, *Đang trả lời (Speaking)* cùng hiệu ứng sóng âm, hỗ trợ nút đọc lại và nút chuyển sang Suy luận sâu (Deep Reasoning).
 
 ---
 
@@ -43,126 +40,175 @@ Hệ thống Trợ lý ảo AI cục bộ siêu tốc độ (Local Voice AI Assi
 
 ```mermaid
 flowchart TD
-    User["👤 Người dùng"] -->|Nói qua Mic| Mic["🎙️ Realtek ALC256 Mic"]
-    Mic -->|Raw PCM 16kHz| HPF["🎛️ Biquad HPF @ 100Hz\n(Lọc rung quạt 39Hz)"]
-    HPF -->|Filtered PCM| VAD["⚡ Schmitt-Trigger VAD\n(Adaptive Noise Tracking)"]
+    User["👤 Người dùng"] -->|Âm thanh thực tế| Mic["🎙️ Micro máy tính"]
+    Speaker["🔊 Loa máy tính"] -.->|Tiếng vọng / Tiếng nhạc| Mic
     
-    VAD -->|Phát hiện giọng nói| WW["🎧 Fast Wake Whisper (ggml-base)\n+ Multi-Accent Regex"]
+    subgraph AEC["Tầng Hệ Điều Hành (PipeWire)"]
+        Mic --> AEC_Filter["🎛️ PipeWire WebRTC AEC\n(EchoCancel_Source)"]
+        Speaker -.->|Loopback Sink| AEC_Filter
+    end
+
+    subgraph AudioEngine["Tầng Thu Âm & DSP (Rust Native)"]
+        AEC_Filter -->|F32 Audio Stream| CPAL["🎙️ cpal Continuous Stream\n(Lock-Free ringbuf)"]
+        CPAL --> Resample["🔄 Stream Resampler\n(44.1k/48k ➔ 16kHz)"]
+        Resample --> HPF["🧹 Stateful Biquad HPF @ 100Hz\n(Lọc rung quạt tản nhiệt)"]
+    end
+
+    subgraph WakeEngine["Tầng Nhận Diện Từ Khóa & VAD (ort ONNX CPU)"]
+        HPF --> VAD["🧠 Silero VAD v5 (32ms)\n(Đo xác suất giọng nói)"]
+        HPF --> OWW["🎯 openWakeWord ONNX (80ms)\n(Melspec ➔ Embedding ➔ Classifier)"]
+        OWW --> Gate{"TriggerGate\n(Patience 160ms + Music Boost)"}
+    end
+
+    Gate -->|Phát hiện 'Alexa' / 'Hey Jarvis'| Chime["🔔 Ting Chime (pw-play)"]
+    Chime --> State["🔄 StateManager\n(/tmp/voice_ai_state.sock)"]
+    State --> UI["🖥️ Dynamic Island QML (Quickshell)"]
+
+    Chime --> STT["⚡ Whisper-rs (In-RAM C++)\n(0 Disk I/O, &[i16] ➔ Text)"]
+    STT --> NLU{"⚡ Fast-Path NLU Router"}
+
+    NLU -->|Lệnh hệ thống / App / Web| Sys["⚙️ Shell / App Launcher / System Info"]
+    NLU -->|Câu hỏi tri thức| Ollama["🧠 Ollama Dynamic Router\n(Fast 2B / Coder 7B / Deep 4B)"]
     
-    WW -->|Phát hiện từ khóa| Chime["🔔 Ting Chime (pw-play)"]
-    Chime -->|Đổi trạng thái| State["🔄 Lock-Free Atomic State\n(/tmp/voice_ai_state.sock)"]
-    State -->|Cập nhật giao diện| UI["🖥️ Dynamic Island QML (Quickshell)"]
-    
-    Chime -->|Chờ lệnh 4.5s| SttQuery["🎙️ Whisper STT (ggml-base / small)"]
-    SttQuery -->|Văn bản câu lệnh| NLU{"⚡ Fast-Path NLU Router"}
-    
-    NLU -->|Lệnh hệ thống / Web / App| Sys["⚙️ Shell / App Launcher / System Info"]
-    NLU -->|Câu hỏi tri thức| Ollama["🧠 Ollama Docker Router\n(Fast 2B / Coder 7B / Reasoning 4B)"]
-    
+    subgraph StreamTTS["Tầng Streaming & Bộ Nhớ"]
+        Ollama --> Splitter["✂️ SentenceStreamSplitter\n(Lọc <think> & Tách câu)"]
+        Splitter --> Piper["🗣️ Piper TTS Stream (1 Process)\n(pw-cat -p --raw)"]
+        Ollama --> Hist["📚 ConversationHistory (3 Turns TTL 120s)"]
+    end
+
     Sys --> Reply["📝 Câu trả lời"]
-    Ollama -->|Lọc bỏ &lt;think&gt;| Reply
-    
-    Reply --> UI
-    Reply -->|Barge-In TTS| Piper["🗣️ Piper TTS Engine (vits-piper)"]
-    Piper -->|Stream âm thanh| Speaker["🔊 Loa máy tính (pw-play)"]
+    Piper --> Speaker
 ```
 
 ---
 
 ## 📦 Cài đặt & Yêu cầu Hệ thống
 
-### 1. Phần mềm cần thiết
-- **Hệ điều hành**: Linux (Ubuntu 22.04 / 24.04 khuyên dùng).
-- **Âm thanh**: PipeWire (`pw-record`, `pw-play`) và ALSA utilities (`amixer`).
-- **Trình biên dịch**: Rust & Cargo (`rustc 1.80+`).
-- **Engine Giao diện**: Quickshell (`quickshell` PPA).
-- **AI Backend**:
-  - `whisper-cli` (Whisper.cpp) đặt tại `~/.local/bin/whisper-cli`.
-  - `piper` (Piper TTS) đặt tại `~/.local/lib/piper/piper`.
-  - Docker Container `ollama` chạy tại `http://localhost:11434`.
+### 1. Gói thư viện phát triển (Ubuntu / Debian)
+```bash
+sudo apt update && sudo apt install -y \
+  libasound2-dev pkg-config cmake clang libclang-dev \
+  pipewire-audio libspa-0.2-modules
+```
+
+### 2. Kích hoạt PipeWire WebRTC Echo Cancellation
+Tạo tệp `~/.config/pipewire/pipewire.conf.d/20-echo-cancel.conf`:
+```conf
+context.modules = [
+  {
+    name = libpipewire-module-echo-cancel
+    args = {
+      source.props = {
+        node.name = "EchoCancel_Source"
+        node.description = "VoiceAI Mic (Echo-Cancel)"
+      }
+      sink.props = {
+        node.name = "EchoCancel_Sink"
+        node.description = "VoiceAI Speaker (Echo-Cancel)"
+      }
+      aec.method = "webrtc"
+      aec.args = {
+        webrtc.extended_filter = true
+        webrtc.delay_agnostic = true
+        webrtc.noise_suppression = true
+      }
+    }
+  }
+]
+```
+Khởi động lại PipeWire và đặt làm thiết bị mặc định:
+```bash
+systemctl --user restart pipewire pipewire-pulse wireplumber
+wpctl set-default $(wpctl status | grep "EchoCancel_Source" | grep -o "[0-9]\+" | head -n 1)
+wpctl set-default $(wpctl status | grep "EchoCancel_Sink" | grep -o "[0-9]\+" | head -n 1)
+```
+
+### 3. Tải các mô hình AI vào thư mục `models/`
+```bash
+mkdir -p models/vad models/wakeword models/whisper models/piper
+
+# 1. Silero VAD v5 (~2.3 MB)
+curl -fL "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx" \
+  -o models/vad/silero_vad.onnx
+
+# 2. openWakeWord (~4.5 MB)
+BASE_OWW="https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
+curl -fL "$BASE_OWW/melspectrogram.onnx"  -o models/wakeword/melspectrogram.onnx
+curl -fL "$BASE_OWW/embedding_model.onnx" -o models/wakeword/embedding_model.onnx
+curl -fL "$BASE_OWW/alexa_v0.1.onnx"      -o models/wakeword/alexa_v0.1.onnx
+curl -fL "$BASE_OWW/hey_jarvis_v0.1.onnx" -o models/wakeword/hey_jarvis_v0.1.onnx
+
+# 3. Whisper (ggml-small.bin ~487 MB hoặc ggml-base.bin ~148 MB)
+# 4. Piper TTS (vi_VN-giong_nu_pho_thong-medium.onnx ~63 MB)
+```
 
 ---
 
 ## 🚀 Hướng dẫn Sử dụng
 
-Binary chính đã được biên dịch và symlink tại `~/.local/bin/ai-assistant-rs`.
-
-### 1. Chạy dịch vụ nền (Daemon + Dynamic Island Overlay)
+### 1. Biên dịch và cài đặt
 ```bash
-# Khởi chạy Daemon túc trực Wake Word + IPC Server + Dynamic Island Overlay:
-ai-assistant-rs
+# Biên dịch bản phát hành release siêu nhẹ (không cần GTK4):
+cargo build --release --bin ai-assistant
+
+# Tạo liên kết tượng trưng vào PATH:
+ln -sf "$(pwd)/target/release/ai-assistant" ~/.local/bin/ai-assistant-rs
 ```
 
-### 2. Quản lý qua Systemd (Dịch vụ tự động chạy cùng hệ điều hành)
-Trợ lý đã được thiết lập dưới dạng dịch vụ `systemd --user` tiêu thụ **dưới 15 MB RAM**:
-
+### 2. Quản lý qua Systemd User Service
 ```bash
-# Xem trạng thái hoạt động
+# Xem trạng thái daemon
 systemctl --user status voice-ai
 
-# Xem nhật ký hoạt động thời gian thực (realtime logs)
+# Xem nhật ký trực tiếp (real-time logs)
 journalctl --user -u voice-ai -f
 
 # Khởi động lại dịch vụ
 systemctl --user restart voice-ai
-
-# Tạm dừng dịch vụ
-systemctl --user stop voice-ai
 ```
 
-### 3. Thực thi câu lệnh dòng lệnh (CLI Subcommands)
+### 3. Danh sách câu lệnh CLI Subcommands
 
 ```bash
+# Kiểm tra trạng thái daemon nền qua IPC:
+ai-assistant-rs --status
+
 # Gửi câu lệnh văn bản tới trợ lý đang chạy nền:
 ai-assistant-rs --query "mấy giờ rồi"
 ai-assistant-rs --query "thời tiết hôm nay thế nào" --voice
-ai-assistant-rs --query "mở youtube"
 ai-assistant-rs --query "hẹn giờ 5 phút"
+ai-assistant-rs --query "giải thích chi tiết con trỏ thông minh trong Rust" --deep
 
-# Kích hoạt trợ lý lắng nghe (tương đương bấm phím tắt):
+# Đọc trực tiếp một đoạn văn bản qua TTS (dùng cho nút loa trên Overlay):
+ai-assistant-rs --speak "Xin chào, hệ thống đã sẵn sàng."
+
+# Kích hoạt micro lắng nghe ngay lập tức (phím tắt):
 ai-assistant-rs --trigger
+
+# Dừng phát âm thanh / ngắt lời tức thì:
+ai-assistant-rs --stop
+
+# Dừng tác vụ cũ và lắng nghe lượt mới:
+ai-assistant-rs --relisten
+
+# Công cụ chẩn đoán VAD và openWakeWord thời gian thực:
+ai-assistant-rs --debug-audio
+
+# Đo kiểm hiệu năng Fast-Path NLU (200 lượt):
+ai-assistant-rs --benchmark
 
 # Chế độ tương tác dòng lệnh (Push-to-Talk):
 ai-assistant-rs --push-to-talk
-
-# Chạy kiểm thử tốc độ xử lý NLU (Benchmark 200 lượt):
-ai-assistant-rs --benchmark
 ```
 
 ---
 
 ## 🗣️ Cách Tương Tác Bằng Giọng Nói (Wake Words)
 
-Bạn có thể gọi trợ lý theo 2 cách cực kỳ tự nhiên:
-
-### Cách 1: Nói liền một mạch (Không cần chờ chuông)
-- *"Alexa, mấy giờ rồi"*
-- *"Trợ lý ơi, mở youtube"*
-- *"Hey Jarvis, kiểm tra pin"*
-- *"Lê xa, thời tiết hôm nay thế nào"*
-
-### Cách 2: Gọi tên ➔ Nghe Ting ➔ Nói câu lệnh
-1. Gọi: **`"Alexa"`** / **`"Trợ lý ơi"`** / **`"Trợ lý"`** / **`"Hey Jarvis"`**.
-2. Nghe tiếng chuông **Ding** và thấy thanh đảo động đổi sang màu tím (*"Đang lắng nghe..."*).
-3. Bạn có **4.5 giây** thoải mái nói câu lệnh của mình.
-
----
-
-## 📊 Kết quả Benchmark NLU Fast-Path
-
-```text
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📊 KẾT QUẢ BENCHMARK NLU ROUTER (200 LƯỢT)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-- Tổng số lượt thực thi : 200 lượt
-- Tốc độ xử lý (Throughput): 18,450 lệnh/giây
-- Độ trễ Tối thiểu (Min) : 10.450 µs (0.010450 ms)
-- Độ trễ Trung vị (Median): 16.890 µs (0.016890 ms)
-- Độ trễ Trung bình (Mean): 17.120 µs (0.017120 ms)
-- Phân vị P99             : 24.500 µs (0.024500 ms)
-- Phân vị P90             : 19.800 µs (0.019800 ms)
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+1. Gọi từ khóa: **`"Alexa"`** hoặc **`"Hey Jarvis"`**.
+2. Nghe tiếng chuông **Ding** và thấy thanh đảo động Dynamic Island chuyển sang màu tím (*"Đang lắng nghe..."*).
+3. Thong thả nói câu lệnh của bạn. Silero VAD sẽ tự động nhận biết khi bạn ngừng nói để chuyển sang xử lý ngay lập tức.
+4. Trợ lý sẽ cất tiếng trả lời câu đầu tiên ngay trong khi Ollama vẫn đang sinh các câu tiếp theo. Bạn có thể hỏi nối tiếp tự nhiên (ví dụ: *"Nó khác C++ ở điểm nào?"*) và trợ lý sẽ nhớ ngữ cảnh câu trước.
 
 ---
 
@@ -170,31 +216,43 @@ Bạn có thể gọi trợ lý theo 2 cách cực kỳ tự nhiên:
 
 ```text
 voice-ai/
-├── Cargo.toml                  # Khai báo phụ thuộc Rust (Tokio, Regex, Clap, Dirs)
+├── Cargo.toml                  # Khai báo phụ thuộc Rust (ort, whisper-rs, cpal, ringbuf, tokio, ...)
 ├── src/
-│   ├── lib.rs                  # Thư viện dùng chung
-│   ├── main.rs                 # Entry point phụ
+│   ├── lib.rs                  # Thư viện lõi dùng chung (audio, core, ai, speech, tools, ipc)
 │   ├── bin/
-│   │   ├── ai-assistant.rs     # Daemon chính, Wake Word Loop, IPC Server, Overlay Supervisor
-│   │   └── voice-overlay.rs    # IPC Bridge cho giao diện
+│   │   ├── ai-assistant/       # CLI & Daemon chính (Đa mô-đun v3.0)
+│   │   │   ├── main.rs         # Định tuyến lệnh CLI, cờ, và IPC client
+│   │   │   ├── context.rs      # AppContext gom các Arc dùng chung & struct Args
+│   │   │   ├── daemon.rs       # Daemon IPC server, Timer Watcher & openWakeWord loop
+│   │   │   ├── pipeline.rs     # Xử lý lệnh thoại, Streaming Ollama -> Piper TTS
+│   │   │   ├── platform.rs     # Quản lý Overlay supervisor, card ALSA, mức mic
+│   │   │   └── diagnostics.rs  # Đo benchmark NLU & công cụ --debug-audio
+│   │   └── voice-overlay.rs    # Giao diện GTK4 dự phòng (optional feature: gtk-overlay)
 │   ├── audio/
-│   │   ├── capture.rs          # PipeWire Audio Recorder, 600ms Pre-Roll, Biquad HPF
-│   │   ├── vad.rs              # Schmitt-Trigger VAD & Butterworth High-Pass Filter @ 100Hz
-│   │   ├── wakeword.rs         # Multi-phrase Phonetic Wake Word Engine (Alexa, Jarvis, Trợ lý)
-│   │   └── stt.rs              # Whisper.cpp C++ Wrapper & Bộ lọc ảo giác YouTube
+│   │   ├── capture.rs          # Continuous cpal stream, lock-free ringbuf, stream resampler
+│   │   ├── vad.rs              # Silero VAD v5 (ort ONNX) & Stateful Biquad HPF
+│   │   ├── oww.rs              # openWakeWord 3 tầng ONNX, TriggerGate, Patience, Music Boost
+│   │   ├── wakeword.rs         # Nhận diện từ khóa dự phòng bằng Whisper
+│   │   └── stt.rs              # Whisper-rs C++ Wrapper trong RAM (0 Disk I/O)
 │   ├── core/
-│   │   ├── nlu/                # Fast-Path Router, Regex Trie, Chuẩn hóa dấu tiếng Việt
-│   │   ├── state.rs            # Lock-Free Atomic Assistant State Manager
-│   │   └── ipc.rs              # Unix Domain Socket IPC Server & Client
+│   │   ├── nlu/                # Fast-Path Router, chuẩn hóa dấu tiếng Việt, Timer manager
+│   │   ├── state.rs            # Lock-Free StateManager với cờ manual_trigger
+│   │   └── memory.rs           # ConversationHistory trượt 3 turns (TTL 120s) & MemoryManager
 │   ├── ai/
-│   │   ├── ollama.rs           # Ollama REST API Client
-│   │   └── router.rs           # Dynamic Model Discovery & Router (Fast, Coder, Reasoning)
-│   └── speech/
-│       ├── tts.rs              # Piper Neural TTS Engine với Barge-In
-│       └── chime.rs            # Âm báo Ding / Success / Error tần số cao
+│   │   ├── ollama.rs           # Ollama client với HTTP streaming & chat options
+│   │   └── router.rs           # Điều hướng động: Fast (2B), Coder (7B), Reasoning (4B)
+│   ├── speech/
+│   │   ├── tts.rs              # Piper Neural TTS, speak_stream song song qua 1 tiến trình
+│   │   ├── sanitize.rs         # SentenceStreamSplitter lọc <think> và chuẩn hóa số/kí tự
+│   │   └── chime.rs            # Âm báo Ding / Wake / Success / Error
+│   └── tools/
+│       ├── system.rs           # Điều khiển âm lượng, pin, quạt powerprofilesctl, screenshot
+│       ├── apps.rs             # Quét và mở ứng dụng Snap / Flatpak / Desktop native
+│       └── timer.rs            # Hẹn giờ & báo thức đếm ngược đổ chuông thật
 ├── overlay/
 │   └── VoiceOverlay.qml        # Giao diện Dynamic Island QML cho Quickshell
-└── models/                     # Thư mục lưu trữ model Whisper và Piper ONNX
+├── docs/                       # Tài liệu hướng dẫn & lịch sử di cư (MAP.md, GLOSSARY.md)
+└── models/                     # Thư mục chứa các mô hình ONNX & Whisper
 ```
 
 ---

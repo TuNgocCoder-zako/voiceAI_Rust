@@ -34,3 +34,23 @@
 - **Context**: Fast-Path NLU is responsible for immediate local actions (volume, brightness, wifi, time, date, opening apps, closing windows) without invoking the heavy LLM. In Python it ran in ~0.02ms - 4ms.
 - **Decision**: Implement Fast-Path NLU in Rust using compiled `regex`, Aho-Corasick automaton, Vietnamese diacritics normalization, and exact prefix/suffix matchers.
 - **Consequences**: Reduces NLU latency from milliseconds to microseconds (< 10µs), delivering near-instant response for daily assistant commands.
+
+## ADR-006: High-Performance Multi-Stage Audio Pipeline (PipeWire AEC + Continuous cpal + Silero VAD v5 + openWakeWord ONNX + In-RAM Whisper)
+- **Status**: accepted (2026-11-22)
+- **Context**: Relying on external `pw-record` processes caused latency, audio dropouts, and room acoustic reflections. Running continuous Whisper inference for wake-word detection wasted CPU resources and produced transcription jitter.
+- **Decision**:
+  - Activate PipeWire WebRTC Echo Cancellation (`EchoCancel_Source` / `EchoCancel_Sink`) at OS level.
+  - Run continuous lifetime audio capture thread via `cpal` with lock-free `ringbuf`, stream resampler (44.1k/48k -> 16kHz), and stateful Biquad High-Pass Filter @ 100Hz.
+  - Implement 3-stage openWakeWord ONNX CPU pipeline (Melspec -> Embedding -> Classifier) with 2-frame patience (160ms) and dynamic music boost (+0.05).
+  - Implement Silero VAD v5 (32ms frames) via `ort` ONNX Runtime CPU.
+  - Keep Whisper context in RAM using `whisper-rs` (C++ in-memory) to transcribe `&[i16]` directly with zero disk I/O.
+- **Consequences**: Wake word CPU usage dropped to ~3-5%, detection latency < 100ms, and command STT latency reduced to ~200-400ms without writing `/tmp/*.wav` files to disk.
+
+## ADR-007: Modular Daemon Architecture and Optional GTK4 Feature (v3.0)
+- **Status**: accepted (2026-11-22)
+- **Context**: The monolithic `src/bin/ai-assistant.rs` grew to over 1,400 lines with high parameter counts across async functions. In addition, GTK4 was unconditionally compiled despite Quickshell QML being the primary UI.
+- **Decision**:
+  - Split `ai-assistant.rs` into modular components under `src/bin/ai-assistant/` (`main.rs`, `context.rs`, `daemon.rs`, `pipeline.rs`, `platform.rs`, `diagnostics.rs`).
+  - Introduce `AppContext` to encapsulate shared `Arc` resources across pipeline and daemon functions.
+  - Make `gtk4` an optional feature (`gtk-overlay`), enabling fast and lean default builds.
+- **Consequences**: Clean separation of concerns, faster build times, and maintainable codebase structure.

@@ -36,3 +36,4 @@ logs/
 *.log
 !logs/.gitkeep
 !logs/agent/.gitkeep
+voice_ai_full_project.txt
