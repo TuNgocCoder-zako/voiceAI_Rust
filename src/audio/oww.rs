@@ -15,8 +15,12 @@ pub struct OpenWakeWordConfig {
 
 impl Default for OpenWakeWordConfig {
     fn default() -> Self {
+        let base_threshold = std::env::var("AI_ASSISTANT_WAKE_THRESHOLD")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.48);
         Self {
-            base_threshold: 0.55,
+            base_threshold,
             music_boost: 0.05,
             patience_frames: 2,
             cooldown_secs: 1.5,
@@ -345,7 +349,15 @@ mod tests {
 
     #[test]
     fn test_trigger_gate_patience_and_music_boost() {
-        let mut gate = TriggerGate::new(2, OpenWakeWordConfig::default());
+        let mut gate = TriggerGate::new(
+            2,
+            OpenWakeWordConfig {
+                base_threshold: 0.55,
+                music_boost: 0.05,
+                patience_frames: 2,
+                cooldown_secs: 1.5,
+            },
+        );
 
         // 1 khung gai nhọn đơn lẻ (0.72) không được kích hoạt do yêu cầu patience = 2
         assert_eq!(

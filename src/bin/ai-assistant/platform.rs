@@ -108,6 +108,38 @@ pub fn ensure_mic_levels() {
         .args(["-c", &card, "sset", "Internal Mic Boost", "1"])
         .output();
     let _ = Command::new("amixer")
-        .args(["-c", &card, "sset", "Capture", "75%"])
+        .args(["-c", &card, "sset", "Capture", "85%"])
         .output();
+    // Đồng bộ mức âm lượng và bỏ mute cho PipeWire Source / EchoCancel
+    let _ = Command::new("wpctl")
+        .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", "1.0"])
+        .output();
+    let _ = Command::new("wpctl")
+        .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "0"])
+        .output();
+
+    // Nâng gain cho micro phần cứng cơ sở trong PipeWire (chống bị giảm âm lượng nguồn)
+    if let Ok(out) = Command::new("wpctl").arg("status").output() {
+        if let Ok(text) = String::from_utf8(out.stdout) {
+            let mut in_sources = false;
+            for line in text.lines() {
+                if line.contains("Sources:") {
+                    in_sources = true;
+                    continue;
+                }
+                if in_sources && (line.contains("Filters:") || line.contains("Streams:") || line.contains("Sinks:") || line.contains("Video")) {
+                    in_sources = false;
+                }
+                if in_sources && line.contains("[vol:") {
+                    if let Some(token) = line.split('.').next() {
+                        let id = token.trim().trim_start_matches(|c: char| !c.is_ascii_digit());
+                        if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
+                            let _ = Command::new("wpctl").args(["set-volume", id, "0.85"]).output();
+                            let _ = Command::new("wpctl").args(["set-mute", id, "0"]).output();
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
