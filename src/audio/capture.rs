@@ -148,10 +148,9 @@ impl ContinuousAudioStream {
                                     let _ = prod.try_push(s);
                                 }
                             } else {
-                                let inv = 1.0 / channels as f32;
+                                // Chỉ lấy kênh 0 để tránh triệt tiêu pha trên mic stereo laptop ASUS
                                 for frame in data.chunks_exact(channels) {
-                                    let sum: f32 = frame.iter().copied().sum();
-                                    let _ = prod.try_push(sum * inv);
+                                    let _ = prod.try_push(frame[0]);
                                 }
                             }
                         },
@@ -161,10 +160,15 @@ impl ContinuousAudioStream {
                     cpal::SampleFormat::I16 => device.build_input_stream(
                         &stream_config,
                         move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                            let inv = 1.0 / (channels as f32 * 32768.0);
-                            for frame in data.chunks_exact(channels) {
-                                let sum: f32 = frame.iter().map(|&s| s as f32).sum();
-                                let _ = prod.try_push(sum * inv);
+                            let inv = 1.0 / 32768.0;
+                            if channels == 1 {
+                                for &s in data {
+                                    let _ = prod.try_push(s as f32 * inv);
+                                }
+                            } else {
+                                for frame in data.chunks_exact(channels) {
+                                    let _ = prod.try_push(frame[0] as f32 * inv);
+                                }
                             }
                         },
                         err_fn,
@@ -173,13 +177,14 @@ impl ContinuousAudioStream {
                     cpal::SampleFormat::U16 => device.build_input_stream(
                         &stream_config,
                         move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                            let inv = 1.0 / channels as f32;
-                            for frame in data.chunks_exact(channels) {
-                                let sum: f32 = frame
-                                    .iter()
-                                    .map(|&s| (s as f32 / 32768.0) - 1.0)
-                                    .sum();
-                                let _ = prod.try_push(sum * inv);
+                            if channels == 1 {
+                                for &s in data {
+                                    let _ = prod.try_push((s as f32 / 32768.0) - 1.0);
+                                }
+                            } else {
+                                for frame in data.chunks_exact(channels) {
+                                    let _ = prod.try_push((frame[0] as f32 / 32768.0) - 1.0);
+                                }
                             }
                         },
                         err_fn,
@@ -258,29 +263,35 @@ impl ContinuousAudioStream {
         self.pending_16k.clear();
     }
 
-    /// Đọc đủ `out.len()` mẫu 16kHz mono f32 [-1.0, 1.0] đã qua resample + HPF 100Hz.
-    /// Trả về `false` nếu bị ngắt bởi `StateManager::is_interrupted()`.
-    pub fn read_exact_f32(
+    /// Trả về Ok(true) khi đọc đủ mẫu, Ok(false) khi bị ngắt bởi StateManager,
+    /// Err khi luồng cpal không có dữ liệu quá 2 giây (cần khởi tạo lại).
+    pub fn read_exact_f32_checked(
         &mut self,
         out: &mut [f32],
         state_mgr: Option<&StateManager>,
-    ) -> bool {
+    ) -> Result<bool, &'static str> {
         let mut raw_buf = [0.0f32; 512];
         let mut resampled = Vec::with_capacity(512);
+        let mut stalled_ms: u32 = 0;
 
         while self.pending_16k.len() < out.len() {
             if let Some(mgr) = state_mgr {
                 if mgr.is_interrupted() {
-                    return false;
+                    return Ok(false);
                 }
             }
 
             let n = self.consumer.pop_slice(&mut raw_buf);
             if n == 0 {
                 thread::sleep(Duration::from_millis(4));
+                stalled_ms += 4;
+                if stalled_ms >= 2000 {
+                    return Err("Luồng âm thanh cpal bị treo quá 2 giây");
+                }
                 continue;
             }
 
+            stalled_ms = 0;
             resampled.clear();
             for &s in &raw_buf[..n] {
                 self.resampler.push_sample(s, &mut resampled);
@@ -294,7 +305,17 @@ impl ContinuousAudioStream {
         for slot in out.iter_mut() {
             *slot = self.pending_16k.pop_front().unwrap_or(0.0);
         }
-        true
+        Ok(true)
+    }
+
+    /// Đọc đủ `out.len()` mẫu 16kHz mono f32 [-1.0, 1.0] đã qua resample + HPF 100Hz.
+    /// Trả về `false` nếu bị ngắt bởi `StateManager::is_interrupted()` hoặc lỗi treo luồng.
+    pub fn read_exact_f32(
+        &mut self,
+        out: &mut [f32],
+        state_mgr: Option<&StateManager>,
+    ) -> bool {
+        self.read_exact_f32_checked(out, state_mgr).unwrap_or(false)
     }
 
     /// Đọc đủ `out.len()` mẫu 16kHz mono i16 đã qua resample + HPF 100Hz.
@@ -366,7 +387,14 @@ impl AudioRecorder {
         self.ensure_started()?;
         let mut guard = self.stream.lock().unwrap();
         let s = guard.as_mut().ok_or("Audio stream chưa khởi tạo")?;
-        Ok(s.read_exact_f32(out, state_mgr))
+        match s.read_exact_f32_checked(out, state_mgr) {
+            Ok(ok) => Ok(ok),
+            Err(reason) => {
+                eprintln!("🔄 [cpal]: {} -> Tự động mở lại thiết bị thu âm...", reason);
+                *guard = None; // Drop luồng cũ để lượt gọi kế tiếp tự start() mới
+                Err(reason.into())
+            }
+        }
     }
 
     /// Thu âm giọng nói từ luồng liên tục cho đến khi phát hiện khoảng lặng hoặc hết thời gian tối đa.

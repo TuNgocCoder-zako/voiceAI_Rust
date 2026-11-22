@@ -74,6 +74,7 @@ impl TriggerGate {
         is_music_playing: bool,
     ) -> Option<(WakeWordType, f32)> {
         let threshold = self.active_threshold(is_music_playing);
+        let fast_peak_threshold = (threshold + 0.22).min(0.85);
 
         if let Some(last) = self.last_trigger {
             if last.elapsed() < Duration::from_secs_f32(self.config.cooldown_secs) {
@@ -87,7 +88,12 @@ impl TriggerGate {
             if idx >= self.patience_counts.len() {
                 break;
             }
-            if score >= threshold {
+            if score >= fast_peak_threshold {
+                match best_hit {
+                    Some((_, prev)) if prev >= score => {}
+                    _ => best_hit = Some((ww_type, score)),
+                }
+            } else if score >= threshold {
                 self.patience_counts[idx] += 1;
                 if self.patience_counts[idx] >= self.config.patience_frames {
                     match best_hit {
@@ -359,9 +365,9 @@ mod tests {
             },
         );
 
-        // 1 khung gai nhọn đơn lẻ (0.72) không được kích hoạt do yêu cầu patience = 2
+        // 1 khung gai nhọn đơn lẻ (0.62) không được kích hoạt do dưới fast_peak_threshold (0.77) và yêu cầu patience = 2
         assert_eq!(
-            gate.evaluate(&[(WakeWordType::Alexa, 0.72), (WakeWordType::Jarvis, 0.05)], false),
+            gate.evaluate(&[(WakeWordType::Alexa, 0.62), (WakeWordType::Jarvis, 0.05)], false),
             None
         );
         // Rớt xuống dưới ngưỡng -> reset bộ đếm patience
@@ -393,5 +399,21 @@ mod tests {
             gate.evaluate(&[(WakeWordType::Alexa, 0.95), (WakeWordType::Jarvis, 0.05)], false),
             None
         );
+    }
+
+    #[test]
+    fn test_fast_peak_single_frame() {
+        let mut gate = TriggerGate::new(
+            2,
+            OpenWakeWordConfig {
+                base_threshold: 0.48,
+                music_boost: 0.05,
+                patience_frames: 2,
+                cooldown_secs: 1.5,
+            },
+        );
+        // Ngưỡng fast peak = (0.48 + 0.22) = 0.70. Điểm 0.82 kích hoạt ngay tức thì ở khung đơn lẻ
+        let hit = gate.evaluate(&[(WakeWordType::Alexa, 0.82)], false);
+        assert_eq!(hit, Some((WakeWordType::Alexa, 0.82)));
     }
 }

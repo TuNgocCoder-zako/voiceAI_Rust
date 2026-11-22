@@ -209,9 +209,27 @@ pub async fn execute_llm_query(
         tts_handle = Some(handle);
     }
 
+    // Kênh cập nhật UI tuần tự để đảm bảo không bao giờ ghi đè Speaking sau khi đã về Idle
+    let (ui_tx, mut ui_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let ui_handle = if update_ui {
+        let mgr_ui = ctx.state_manager.clone();
+        let q_ui = prompt.to_string();
+        Some(tokio::spawn(async move {
+            while let Some(text_snap) = ui_rx.recv().await {
+                if mgr_ui.is_interrupted() {
+                    break;
+                }
+                mgr_ui
+                    .set_state_full(AssistantState::Speaking, Some(text_snap), Some(q_ui.clone()))
+                    .await;
+            }
+        }))
+    } else {
+        None
+    };
+
     let mut splitter = SentenceStreamSplitter::new();
     let mut visible_acc = String::new();
-    let prompt_owned = prompt.to_string();
 
     let stream_res = ctx
         .ollama
@@ -236,19 +254,17 @@ pub async fn execute_llm_query(
                 }
 
                 if update_ui {
-                    let mgr_c = ctx.state_manager.clone();
-                    let text_snap = visible_acc.clone();
-                    let q_snap = prompt_owned.clone();
-                    tokio::spawn(async move {
-                        mgr_c
-                            .set_state_full(AssistantState::Speaking, Some(text_snap), Some(q_snap))
-                            .await;
-                    });
+                    let _ = ui_tx.send(visible_acc.clone());
                 }
             }
         })
         .await
         .map_err(|e| e.to_string());
+
+    drop(ui_tx);
+    if let Some(h) = ui_handle {
+        let _ = h.await;
+    }
 
     for last_sent in splitter.flush() {
         if !visible_acc.is_empty() {
