@@ -194,6 +194,26 @@ impl StateManager {
         write_ui_state_atomic(&ui_state);
     }
 
+    /// Khôi phục trạng thái UI về idle sau khi đã kích hoạt chat
+    pub fn reset_chat_to_idle(&self) {
+        let now_sec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        let ui_state = AlexaUiState {
+            status: "idle".to_string(),
+            text: String::new(),
+            subtext: String::new(),
+            query: String::new(),
+            is_long_text: false,
+            long_answer: String::new(),
+            updated_at: now_sec,
+        };
+
+        write_ui_state_atomic(&ui_state);
+    }
+
     pub fn has_manual_trigger(&self) -> bool {
         self.manual_trigger.load(Ordering::SeqCst)
     }

@@ -21,7 +21,7 @@ ShellRoot {
     property string previousStatus: "idle"
     property string statusText: ""
     property string subText: ""
-    property bool isVisible: true
+    property bool isVisible: false
     property bool isTextMode: false
     property bool isDeepThinking: false
     property bool userIsTyping: false
@@ -72,11 +72,13 @@ ShellRoot {
             }
 
             if (st === "chat") {
-                root.isVisible = true;
-                root.isTextMode = true;
-                root.userIsTyping = true;
-                autoCollapseTimer.stop();
-                hideTimer.stop();
+                if (!root.isTextMode) {
+                    root.isVisible = true;
+                    root.isTextMode = true;
+                    root.userIsTyping = false;
+                    textInput.forceActiveFocus();
+                    autoCollapseTimer.restart();
+                }
             }
 
             let prevStatus = root.currentStatus;
@@ -183,26 +185,33 @@ ShellRoot {
         }
     }
 
-    // Timer tự động thu chat lại sau 3-5s (5000ms) nếu người dùng không tương tác
+    function closeChat() {
+        autoCollapseTimer.stop();
+        hideTimer.stop();
+        root.isTextMode = false;
+        root.userIsTyping = false;
+        textInput.text = "";
+        root.dismissCard();
+        root.isVisible = false;
+    }
+
+    // Timer tự động thu gọn/đóng lại sau 5-10s nếu người dùng không tương tác
     Timer {
         id: autoCollapseTimer
-        interval: 5000
+        interval: root.isTextMode ? 10000 : 5000
         repeat: false
         onTriggered: {
             // Khi AI đang lắng nghe, suy nghĩ hoặc phát âm: TUYỆT ĐỐI KHÔNG thu lại hay đóng thẻ!
             if (root.currentStatus === "listening" || root.currentStatus === "thinking" || root.currentStatus === "speaking") {
                 return;
             }
-            if (root.isTextMode && (textInput.text.trim().length > 0 || textInput.inputMethodComposing || root.userIsTyping)) {
+            if (root.isTextMode && (textInput.text.trim().length > 0 || textInput.inputMethodComposing)) {
                 return;
             }
             if (cardHover.hovered || pillHover.hovered) {
                 return;
             }
-            root.isTextMode = false;
-            root.userIsTyping = false;
-            root.dismissCard();
-            root.isVisible = false;
+            root.closeChat();
         }
     }
 
@@ -1171,7 +1180,7 @@ ShellRoot {
                                                 hideTimer.stop();
                                             }
                                         } else {
-                                            if (textInput.text.trim().length === 0 && !root.isLongAnswer && (root.currentStatus === "idle" || root.currentStatus === "listening")) {
+                                            if (textInput.text.trim().length === 0 && !root.isLongAnswer) {
                                                 autoCollapseTimer.restart();
                                             }
                                         }
@@ -1198,10 +1207,7 @@ ShellRoot {
                                     }
 
                                     Keys.onEscapePressed: {
-                                        autoCollapseTimer.stop();
-                                        root.isTextMode = false;
-                                        root.dismissCard();
-                                        root.isVisible = false;
+                                        root.closeChat();
                                     }
 
                                     Keys.onPressed: (event) => {
@@ -1309,10 +1315,7 @@ ShellRoot {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
-                                            autoCollapseTimer.stop();
-                                            root.isTextMode = false;
-                                            root.dismissCard();
-                                            root.isVisible = false;
+                                            root.closeChat();
                                         }
                                     }
                                 }

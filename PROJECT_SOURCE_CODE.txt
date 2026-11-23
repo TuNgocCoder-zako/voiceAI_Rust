@@ -1,19 +1,11 @@
 ================================================================================
-          BẢN ĐÓNG GÓI MÃ NGUỒN TOÀN DIỆN DỰ ÁN VOICE AI (v3.5.3)
+          BẢN ĐÓNG GÓI MÃ NGUỒN TOÀN DIỆN DỰ ÁN VOICE AI (v3.5.4)
 ================================================================================
-Thời gian đóng gói : 2026-11-23 19:56:47
+Thời gian đóng gói : 2026-11-23 20:06:03
 Tổng số tập tin    : 43 files (Cấu hình, Service, QML & Rust Core)
 Trạng thái kiểm thử: 26/26 Unit Tests PASS, 0 Error, 0 Warning
 Kho lưu trữ Git    : https://github.com/TuNgocCoder-zako/voiceAI_Rust.git
-Các bản vá cốt lõi :
-  1. Mở Overlay khi boot: Đọc động DISPLAY, WAYLAND_DISPLAY, XAUTHORITY từ systemd show-environment,
-     tự dò tệp .mutter-Xwaylandauth.* và bổ sung PartOf=graphical-session.target.
-  2. App Launcher & NLU: Khử triệt để lời mở/kết lịch sự tiếng Việt (3 vòng), index Name[vi] & stem,
-     bổ sung Sorensen-Dice match >= 0.78, fallback binary PATH, truyền môi trường đồ họa khi launch app.
-  3. Chế độ gõ trực tiếp (Text Mode / --chat): Hỗ trợ cờ --chat qua IPC, focusable trên Overlay,
-     bổ sung cờ --silent không phát âm TTS khi truy vấn.
-  4. Câu trả lời dài không bị ngắt quãng: Nâng num_predict lên 512-2048, thống nhất num_ctx 2048,
-     tối ưu SYSTEM_PROMPT cho câu trả lời hoàn chỉnh, mở rộng watchdog Overlay 300s và giới hạn đọc 8000 ký tự.
+Bản vá mới nhất    : Tự động thu gọn Text Mode (10s idle), thoát ngay bằng Esc/✕, ẩn mặc định khi khởi động.
 ================================================================================
 
 ================================================================================
@@ -104,7 +96,7 @@ StandardError=journal
 WantedBy=graphical-session.target
 
 ================================================================================
-[03/43] TỆP: overlay/VoiceOverlay.qml (1364 dòng, 64,363 bytes)
+[03/43] TỆP: overlay/VoiceOverlay.qml (1367 dòng, 64,121 bytes)
 ================================================================================
 import QtQuick
 import QtQuick.Layouts
@@ -129,7 +121,7 @@ ShellRoot {
     property string previousStatus: "idle"
     property string statusText: ""
     property string subText: ""
-    property bool isVisible: true
+    property bool isVisible: false
     property bool isTextMode: false
     property bool isDeepThinking: false
     property bool userIsTyping: false
@@ -180,11 +172,13 @@ ShellRoot {
             }
 
             if (st === "chat") {
-                root.isVisible = true;
-                root.isTextMode = true;
-                root.userIsTyping = true;
-                autoCollapseTimer.stop();
-                hideTimer.stop();
+                if (!root.isTextMode) {
+                    root.isVisible = true;
+                    root.isTextMode = true;
+                    root.userIsTyping = false;
+                    textInput.forceActiveFocus();
+                    autoCollapseTimer.restart();
+                }
             }
 
             let prevStatus = root.currentStatus;
@@ -291,26 +285,33 @@ ShellRoot {
         }
     }
 
-    // Timer tự động thu chat lại sau 3-5s (5000ms) nếu người dùng không tương tác
+    function closeChat() {
+        autoCollapseTimer.stop();
+        hideTimer.stop();
+        root.isTextMode = false;
+        root.userIsTyping = false;
+        textInput.text = "";
+        root.dismissCard();
+        root.isVisible = false;
+    }
+
+    // Timer tự động thu gọn/đóng lại sau 5-10s nếu người dùng không tương tác
     Timer {
         id: autoCollapseTimer
-        interval: 5000
+        interval: root.isTextMode ? 10000 : 5000
         repeat: false
         onTriggered: {
             // Khi AI đang lắng nghe, suy nghĩ hoặc phát âm: TUYỆT ĐỐI KHÔNG thu lại hay đóng thẻ!
             if (root.currentStatus === "listening" || root.currentStatus === "thinking" || root.currentStatus === "speaking") {
                 return;
             }
-            if (root.isTextMode && (textInput.text.trim().length > 0 || textInput.inputMethodComposing || root.userIsTyping)) {
+            if (root.isTextMode && (textInput.text.trim().length > 0 || textInput.inputMethodComposing)) {
                 return;
             }
             if (cardHover.hovered || pillHover.hovered) {
                 return;
             }
-            root.isTextMode = false;
-            root.userIsTyping = false;
-            root.dismissCard();
-            root.isVisible = false;
+            root.closeChat();
         }
     }
 
@@ -1279,7 +1280,7 @@ ShellRoot {
                                                 hideTimer.stop();
                                             }
                                         } else {
-                                            if (textInput.text.trim().length === 0 && !root.isLongAnswer && (root.currentStatus === "idle" || root.currentStatus === "listening")) {
+                                            if (textInput.text.trim().length === 0 && !root.isLongAnswer) {
                                                 autoCollapseTimer.restart();
                                             }
                                         }
@@ -1306,10 +1307,7 @@ ShellRoot {
                                     }
 
                                     Keys.onEscapePressed: {
-                                        autoCollapseTimer.stop();
-                                        root.isTextMode = false;
-                                        root.dismissCard();
-                                        root.isVisible = false;
+                                        root.closeChat();
                                     }
 
                                     Keys.onPressed: (event) => {
@@ -1417,10 +1415,7 @@ ShellRoot {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: {
-                                            autoCollapseTimer.stop();
-                                            root.isTextMode = false;
-                                            root.dismissCard();
-                                            root.isVisible = false;
+                                            root.closeChat();
                                         }
                                     }
                                 }
@@ -4761,7 +4756,7 @@ impl AppContext {
 }
 
 ================================================================================
-[15/43] TỆP: src/bin/ai-assistant/daemon.rs (391 dòng, 17,475 bytes)
+[15/43] TỆP: src/bin/ai-assistant/daemon.rs (398 dòng, 17,820 bytes)
 ================================================================================
 use super::context::AppContext;
 use std::sync::Arc;
@@ -4871,6 +4866,13 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
             ActionRequest::Chat => {
                 println!("💬 Nhận sự kiện Chat: Bật giao diện nhập văn bản...");
                 ctx.state_manager.trigger_chat();
+                let mgr = ctx.state_manager.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                    if mgr.get_state_sync() == AssistantState::Idle {
+                        mgr.reset_chat_to_idle();
+                    }
+                });
             }
             ActionRequest::Query { text, deep, silent } => {
                 if ctx.tts.is_speaking() || ctx.state_manager.get_state_sync() != AssistantState::Idle {
@@ -8213,7 +8215,7 @@ mod tests {
 }
 
 ================================================================================
-[29/43] TỆP: src/core/state.rs (210 dòng, 6,345 bytes)
+[29/43] TỆP: src/core/state.rs (230 dòng, 6,981 bytes)
 ================================================================================
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -8401,6 +8403,26 @@ impl StateManager {
         let ui_state = AlexaUiState {
             status: "chat".to_string(),
             text: "Nhập câu hỏi hoặc câu lệnh của bạn...".to_string(),
+            subtext: String::new(),
+            query: String::new(),
+            is_long_text: false,
+            long_answer: String::new(),
+            updated_at: now_sec,
+        };
+
+        write_ui_state_atomic(&ui_state);
+    }
+
+    /// Khôi phục trạng thái UI về idle sau khi đã kích hoạt chat
+    pub fn reset_chat_to_idle(&self) {
+        let now_sec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        let ui_state = AlexaUiState {
+            status: "idle".to_string(),
+            text: String::new(),
             subtext: String::new(),
             query: String::new(),
             is_long_text: false,
