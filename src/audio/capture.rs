@@ -399,9 +399,6 @@ impl ContinuousAudioStream {
         for slot in out.iter_mut() {
             *slot = self.pending_16k.pop_front().unwrap_or(0.0);
         }
-        if out.len() >= 128 {
-            self.agc.process_frame(out);
-        }
         Ok(true)
     }
 
@@ -625,12 +622,12 @@ impl AudioRecorder {
         self.ensure_started()?;
         vad.reset();
 
-        const SPEECH_START_PROB: f32 = 0.42;
-        const SPEECH_CONT_PROB: f32 = 0.28;
+        const SPEECH_START_PROB: f32 = 0.45;
+        const SPEECH_CONT_PROB: f32 = 0.30;
         const START_MIN_FRAMES: u32 = 2;    // 64ms liên tiếp
-        const END_SILENCE_FRAMES: u32 = 34; // ~1088ms im lặng để chốt câu (không ngắt sớm khi ngập ngừng)
-        const MIN_SPEECH_FRAMES: u32 = 8;   // ~256ms tối thiểu
-        const PREROLL_FRAMES: usize = 20;   // ~640ms đệm đầu câu
+        const END_SILENCE_FRAMES: u32 = 20; // 640ms (cắt ~450ms độ trễ sau khi người dùng dứt câu)
+        const MIN_SPEECH_FRAMES: u32 = 7;   // 224ms tối thiểu
+        const PREROLL_FRAMES: usize = 14;   // 448ms đệm đầu câu
 
         let max_wait_frames = ((initial_wait_secs * 1000.0) / 32.0).round() as u32;
         let max_speech_frames = ((max_speech_secs * 1000.0) / 32.0).round() as u32;

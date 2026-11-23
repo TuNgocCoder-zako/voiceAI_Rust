@@ -310,13 +310,13 @@ impl ModelRouter {
             TaskRole::Fast => ChatOptions {
                 temperature: Some(0.3),
                 num_predict: Some(120), // Ngắn gọn để đọc TTS tự nhiên trong vài giây
-                num_ctx: Some(1024),
+                num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
             TaskRole::General => ChatOptions {
                 temperature: Some(0.4),
                 num_predict: Some(200),
-                num_ctx: Some(1024),
+                num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
         }

@@ -192,6 +192,10 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         (r"(?i)\b(?:quý\s*vị\s*hẹn\s*giờ)\b", "hủy hẹn giờ"),
         (r"(?i)\b(?:uốc\s*(?:xây|bay|sờ\s*bây)|quốc\s*(?:xây|bay|sờ\s*bây))\b", "workspace"),
         (r"(?i)\b(?:híp\s*(?:len|lần|lan|lơn)|hai\s*pơ\s*(?:len|lan))\b", "hyprland"),
+        // Gọt từ mở đầu lịch sự
+        (r"(?i)^(?:hãy|làm\s+ơn|cho\s+(?:tôi|mình|anh|em)|giúp\s+(?:tôi|mình))\s+", ""),
+        // Gọt hậu tố lịch sự/khẩu ngữ ở cuối câu
+        (r"(?i)\s+(?:giúp\s+(?:tôi|mình|nhé|nha)|hộ\s+(?:tôi|mình|cái)|cho\s+(?:tôi|mình)|lên\s+đi|lên\s+nhé|lên|đi|nhé|nha|với|ạ)$", ""),
     ];
 
     rules

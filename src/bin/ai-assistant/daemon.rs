@@ -46,11 +46,17 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
     std::thread::Builder::new()
         .name("wake-word-worker".to_string())
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(run_wake_word_loop(ww_ctx, wake_whisper));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(run_wake_word_loop(ww_ctx, wake_whisper));
+            }));
+            if res.is_err() {
+                eprintln!("💥 [FATAL] wake-word-worker bị panic! Thoát tiến trình để systemd tự khởi động lại...");
+                std::process::exit(1);
+            }
         })
         .expect("Failed to spawn wake-word-worker thread");
 

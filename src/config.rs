@@ -41,6 +41,8 @@ impl Default for Config {
         url_shortcuts.insert("zalo".into(), "https://chat.zalo.me".into());
         url_shortcuts.insert("spotify".into(), "https://open.spotify.com".into());
         url_shortcuts.insert("google".into(), "https://www.google.com".into());
+        url_shortcuts.insert("chrome".into(), "https://www.google.com".into());
+        url_shortcuts.insert("google chrome".into(), "https://www.google.com".into());
         url_shortcuts.insert("chatgpt".into(), "https://chatgpt.com".into());
         url_shortcuts.insert("claude".into(), "https://claude.ai".into());
         url_shortcuts.insert("gemini".into(), "https://gemini.google.com".into());
@@ -53,6 +55,8 @@ impl Default for Config {
         url_display_names.insert("zalo".into(), "Zalo".into());
         url_display_names.insert("spotify".into(), "Spotify".into());
         url_display_names.insert("google".into(), "Google".into());
+        url_display_names.insert("chrome".into(), "Google Chrome".into());
+        url_display_names.insert("google chrome".into(), "Google Chrome".into());
 
         let mut app_aliases = HashMap::new();
         app_aliases.insert("vs code".into(), "code".into());

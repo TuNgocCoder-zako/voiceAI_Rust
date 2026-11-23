@@ -35,8 +35,9 @@ pub async fn capture_and_handle_followup(
     let mut one_breath_seed: Vec<Vec<f32>> = Vec::new();
     let mut is_one_breath = false;
 
-    // 1. Dò nhanh 448ms (14 khung) ngay sau Wake Word để xem người dùng có đang nói liền 1 hơi không
-    if allow_one_breath {
+    // 1. Dò nhanh One-Breath khi được bật qua biến môi trường AI_ASSISTANT_ONE_BREATH=1
+    let one_breath_enabled = allow_one_breath && std::env::var("AI_ASSISTANT_ONE_BREATH").is_ok();
+    if one_breath_enabled {
         if let Some(vad) = silero_vad.as_deref_mut() {
             const PROBE_FRAMES: usize = 14; // 14 x 32ms = 448ms
             let mut voice_after_tail = 0u32;
@@ -89,7 +90,7 @@ pub async fn capture_and_handle_followup(
             .await;
 
         play_chime(ChimeType::Wake);
-        tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
         ctx.recorder.flush();
     }
 
@@ -147,7 +148,9 @@ pub async fn capture_and_handle_followup(
                 .await;
 
             let stt_start = Instant::now();
-            let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
+            if std::env::var("AI_ASSISTANT_DEBUG_WAV").is_ok() {
+                let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
+            }
             println!(
                 "🎙️ Đã thu {} mẫu ({:.2}s). Bắt đầu nhận diện Whisper...",
                 followup_samples.len(),

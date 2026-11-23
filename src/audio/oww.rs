@@ -18,11 +18,11 @@ impl Default for OpenWakeWordConfig {
         let base_threshold = std::env::var("AI_ASSISTANT_WAKE_THRESHOLD")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.35);
+            .unwrap_or(0.45);
         Self {
             base_threshold,
             music_boost: 0.05,
-            patience_frames: 1, // Kích hoạt tức thì ở khung đỉnh (80ms), bắt nhạy giọng nói tự nhiên
+            patience_frames: 2,
             cooldown_secs: 1.5,
         }
     }
@@ -419,8 +419,16 @@ mod tests {
 
     #[test]
     fn test_single_frame_wake_trigger() {
-        let mut gate = TriggerGate::new(1, OpenWakeWordConfig::default());
-        // Khung đơn lẻ đạt ngưỡng nhạy (0.35) phải kích hoạt ngay lập tức
+        let mut gate = TriggerGate::new(
+            1,
+            OpenWakeWordConfig {
+                base_threshold: 0.40,
+                music_boost: 0.05,
+                patience_frames: 1,
+                cooldown_secs: 1.5,
+            },
+        );
+        // Khung đơn lẻ đạt ngưỡng khi cấu hình patience = 1 kích hoạt ngay lập tức
         assert_eq!(
             gate.evaluate(&[(WakeWordType::Alexa, 0.45)], false),
             Some((WakeWordType::Alexa, 0.45))

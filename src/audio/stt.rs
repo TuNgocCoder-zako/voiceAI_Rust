@@ -181,6 +181,8 @@ impl WhisperEngine {
         params.set_translate(false);
         params.set_initial_prompt(WHISPER_PROMPT);
         params.set_no_context(true);
+        params.set_single_segment(true);
+        params.set_no_timestamps(true);
         params.set_no_speech_thold(0.6);
         params.set_temperature(0.0);
         params.set_temperature_inc(0.0);

@@ -137,7 +137,9 @@ pub static TIMER_SHORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^
 
 // Web & YouTube & Google
 pub static YT_SEARCH_RE1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:mở|phát|bật|nghe)?\s*(?:bài hát|nhạc|video|clip)?\s*(.+?)\s*trên\s*youtube").unwrap());
-pub static YT_SEARCH_RE2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:mở|lên|vào)\s+youtube\s+(?:tìm|xem|nghe|bài hát|nhạc|video)?\s*(.+)").unwrap());
+pub static YT_SEARCH_RE2: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:mở|lên|vào)\s+youtube\s+(?:và\s+|để\s+)?(?:tìm|xem|nghe|phát|mở|bài hát|nhạc|video)\s+(.+)").unwrap()
+});
 pub static GOOGLE_SEARCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?:tìm kiếm|tra cứu|tìm)\s+(.+?)(?:\s+(?:trên|ở|bằng)\s+(?:google|mạng|trình duyệt))?$").unwrap());
 
 // App / Web Launching

@@ -1,7 +1,7 @@
 ================================================================================
           DỰ ÁN VOICE AI (v3.5.0) - BẢN ĐÓNG GÓI MÃ NGUỒN TOÀN BỘ
 ================================================================================
-Thời gian đóng gói: 2026-11-23 13:03:39
+Thời gian đóng gói: 2026-11-23 13:25:53
 Tổng số tệp mã nguồn: 44 tệp
 Ngôn ngữ & Nền tảng: Pure Rust (2021 edition), Linux PipeWire / Vulkan GPU / QML
 
@@ -15,13 +15,13 @@ MỤC LỤC & TÓM TẮT VAI TRÒ CÁC TỆP ĐƯỢC ĐÓNG GÓI:
     -> Giao diện Dynamic Island đồ họa QML chạy qua Quickshell, hiển thị trạng thái động (idle, listening, thinking, speaking) kèm hiệu ứng sóng âm.
 04. [src/lib.rs] (17 dòng, 498 bytes)
     -> Entry point của thư viện Rust `voice_ai`, khai báo các module con và re-export các struct/hàm dùng chung.
-05. [src/config.rs] (84 dòng, 3,699 bytes)
+05. [src/config.rs] (88 dòng, 4,023 bytes)
     -> Định nghĩa struct `Config` lưu các hằng số mặc định: URL Ollama, Socket IPC, Sample rate 16kHz, kích thước chunk âm thanh và danh sách ứng dụng.
 06. [src/bin/ai-assistant/main.rs] (214 dòng, 8,030 bytes)
     -> Điểm vào (main) của binary `ai-assistant`: phân tích cờ CLI (clap) cho chế độ daemon, status, query, stop, relisten, benchmark.
-07. [src/bin/ai-assistant/daemon.rs] (358 dòng, 15,267 bytes)
+07. [src/bin/ai-assistant/daemon.rs] (364 dòng, 15,604 bytes)
     -> Vòng lặp tiến trình nền chính: khởi tạo IPC server, quản lý tiến trình overlay, lắng nghe luồng âm thanh 32ms và điều phối UnifiedWakeWordEngine.
-08. [src/bin/ai-assistant/pipeline.rs] (474 dòng, 16,454 bytes)
+08. [src/bin/ai-assistant/pipeline.rs] (477 dòng, 16,622 bytes)
     -> Điều phối chu trình giọng nói: dò One-Breath 448ms, phát Ting non-blocking, thu âm Silero VAD, STT Whisper Vulkan, Fast-Path NLU, Ollama có chat_with_cancel, TTS streaming.
 09. [src/bin/ai-assistant/context.rs] (93 dòng, 3,524 bytes)
     -> Struct AppContext chứa tài nguyên dùng chung giữa các luồng: Config, History, AppIndex, WhisperEngine, PiperTts, StateManager.
@@ -33,13 +33,13 @@ MỤC LỤC & TÓM TẮT VAI TRÒ CÁC TỆP ĐƯỢC ĐÓNG GÓI:
     -> Binary phụ trợ: giao diện overlay GTK4 dự phòng (dùng khi không có Quickshell, kích hoạt qua feature gtk-overlay).
 13. [src/audio/mod.rs] (34 dòng, 1,021 bytes)
     -> Quản lý môi trường ONNX Runtime (ort) dùng chung một lần duy nhất qua OnceLock, re-export các module âm thanh.
-14. [src/audio/capture.rs] (858 dòng, 30,547 bytes)
+14. [src/audio/capture.rs] (855 dòng, 30,454 bytes)
     -> Luồng thu âm liên tục qua cpal (16kHz mono), bộ lọc Biquad HPF 100Hz, Streaming Soft-AGC (min_gain 1.0, release 0.18), và AudioRecorder thu âm Silero VAD / One-Breath.
-15. [src/audio/stt.rs] (324 dòng, 11,308 bytes)
+15. [src/audio/stt.rs] (326 dòng, 11,389 bytes)
     -> Nhận diện giọng nói Whisper in-RAM: nạp sẵn mô hình ggml-large-v3-turbo-q5_0 trên Vulkan GPU device 0, lưu giữ WhisperState cố định chống phân mảnh VRAM.
 16. [src/audio/vad.rs] (290 dòng, 9,774 bytes)
     -> Phát hiện giọng nói Silero VAD v5 (ONNX 512 mẫu / 32ms), quản lý tensor trạng thái ẩn và ngưỡng xác suất hoạt động giọng nói.
-17. [src/audio/oww.rs] (430 dòng, 15,075 bytes)
+17. [src/audio/oww.rs] (438 dòng, 15,177 bytes)
     -> openWakeWord ONNX 3 tầng (melspec, embedding, classifiers) kèm TriggerGate (ngưỡng động, boost khi phát nhạc, cooldown, kích hoạt đơn khung 80ms nhạy bén).
 18. [src/audio/wakeword.rs] (303 dòng, 12,111 bytes)
     -> Định nghĩa enum WakeWordType (Alexa, Jarvis, Assistant), hàm detect_wake_word phân tích tiền tố/hậu tố chuỗi văn bản.
@@ -53,17 +53,17 @@ MỤC LỤC & TÓM TẮT VAI TRÒ CÁC TỆP ĐƯỢC ĐÓNG GÓI:
     -> Quản lý lịch sử hội thoại trượt (sliding window 3 lượt, TTL 120 giây), tự động làm mới bộ nhớ khi hết hạn.
 23. [src/core/nlu/mod.rs] (8 dòng, 165 bytes)
     -> Re-export hàm fast_path_nlu phân loại ý định người dùng siêu tốc.
-24. [src/core/nlu/router.rs] (664 dòng, 23,457 bytes)
+24. [src/core/nlu/router.rs] (685 dòng, 24,429 bytes)
     -> Bộ định tuyến lệnh 2 tầng: Fast-Path NLU xử lý lệnh hệ thống (< 15 µs) và Deep-Path chuyển tiếp câu hỏi cho Ollama LLM.
-25. [src/core/nlu/normalize.rs] (262 dòng, 13,791 bytes)
+25. [src/core/nlu/normalize.rs] (266 dòng, 14,164 bytes)
     -> Chuẩn hóa chuỗi tiếng Việt, tách bỏ dấu thanh, sửa các lỗi dị âm STT đặc trưng (Má giữ tập -> mở youtube, mở gõ gồ -> mở google).
-26. [src/core/nlu/patterns.rs] (148 dòng, 13,866 bytes)
+26. [src/core/nlu/patterns.rs] (150 dòng, 13,904 bytes)
     -> Hệ thống biểu thức chính quy (Regex) biên dịch sẵn bắt các mẫu câu điều khiển: âm lượng, độ sáng, pin, ứng dụng, hẹn giờ, tìm kiếm web.
 27. [src/core/nlu/fuzzy.rs] (69 dòng, 2,382 bytes)
     -> So khớp mờ dựa trên thuật toán sorensen_dice cho các hành động chuẩn hóa canonical actions.
 28. [src/ai/mod.rs] (6 dòng, 185 bytes)
     -> Re-export module AI Ollama client và bộ định tuyến TaskRole.
-29. [src/ai/ollama.rs] (204 dòng, 6,546 bytes)
+29. [src/ai/ollama.rs] (216 dòng, 6,983 bytes)
     -> Async HTTP client kết nối Ollama: hỗ trợ streaming SSE, lọc thẻ suy nghĩ <think>, và chat_with_cancel ngắt kết nối TCP ngay khi hủy tác vụ.
 30. [src/ai/router.rs] (375 dòng, 14,358 bytes)
     -> Tự động phân loại câu hỏi (Code, Reasoning, Sáng tạo, Hội thoại) để chọn model tối ưu (Fast 2B, Coder 7B, Deep/Reasoning).
@@ -97,7 +97,7 @@ MỤC LỤC & TÓM TẮT VAI TRÒ CÁC TỆP ĐƯỢC ĐÓNG GÓI:
     -> Chương trình benchmark đo kiểm hiệu năng phân loại của Fast-Path NLU trên 25 câu lệnh tiếng Việt chuẩn.
 
 --------------------------------------------------------------------------------
-TỔNG CỘNG: 44 tệp | 10,066 dòng mã nguồn | 382,224 bytes
+TỔNG CỘNG: 44 tệp | 10,125 dòng mã nguồn | 384,963 bytes
 ================================================================================
 
 
@@ -186,7 +186,7 @@ Environment=AI_ASSISTANT_WHISPER_GPU=0
 Environment=AI_ASSISTANT_WHISPER_MODEL=%h/Projects/rust/voice-ai/models/whisper/ggml-large-v3-turbo-q5_0.bin
 Environment=PICOVOICE_ACCESS_KEY=
 Environment=AI_ASSISTANT_PORCUPINE_SENSITIVITY=0.65
-Environment=AI_ASSISTANT_WAKE_THRESHOLD=0.35
+Environment=AI_ASSISTANT_WAKE_THRESHOLD=0.45
 PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
 StandardOutput=journal
 StandardError=journal
@@ -1571,7 +1571,7 @@ pub use tools::apps::build_app_index;
 
 ================================================================================
 TỆP 05/44: src/config.rs
-Dung lượng: 84 dòng | 3,699 bytes
+Dung lượng: 88 dòng | 4,023 bytes
 Mô tả: Định nghĩa struct `Config` lưu các hằng số mặc định: URL Ollama, Socket IPC, Sample rate 16kHz, kích thước chunk âm thanh và danh sách ứng dụng.
 ================================================================================
 
@@ -1618,6 +1618,8 @@ impl Default for Config {
         url_shortcuts.insert("zalo".into(), "https://chat.zalo.me".into());
         url_shortcuts.insert("spotify".into(), "https://open.spotify.com".into());
         url_shortcuts.insert("google".into(), "https://www.google.com".into());
+        url_shortcuts.insert("chrome".into(), "https://www.google.com".into());
+        url_shortcuts.insert("google chrome".into(), "https://www.google.com".into());
         url_shortcuts.insert("chatgpt".into(), "https://chatgpt.com".into());
         url_shortcuts.insert("claude".into(), "https://claude.ai".into());
         url_shortcuts.insert("gemini".into(), "https://gemini.google.com".into());
@@ -1630,6 +1632,8 @@ impl Default for Config {
         url_display_names.insert("zalo".into(), "Zalo".into());
         url_display_names.insert("spotify".into(), "Spotify".into());
         url_display_names.insert("google".into(), "Google".into());
+        url_display_names.insert("chrome".into(), "Google Chrome".into());
+        url_display_names.insert("google chrome".into(), "Google Chrome".into());
 
         let mut app_aliases = HashMap::new();
         app_aliases.insert("vs code".into(), "code".into());
@@ -1883,7 +1887,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ================================================================================
 TỆP 07/44: src/bin/ai-assistant/daemon.rs
-Dung lượng: 358 dòng | 15,267 bytes
+Dung lượng: 364 dòng | 15,604 bytes
 Mô tả: Vòng lặp tiến trình nền chính: khởi tạo IPC server, quản lý tiến trình overlay, lắng nghe luồng âm thanh 32ms và điều phối UnifiedWakeWordEngine.
 ================================================================================
 
@@ -1935,11 +1939,17 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
     std::thread::Builder::new()
         .name("wake-word-worker".to_string())
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            rt.block_on(run_wake_word_loop(ww_ctx, wake_whisper));
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                rt.block_on(run_wake_word_loop(ww_ctx, wake_whisper));
+            }));
+            if res.is_err() {
+                eprintln!("💥 [FATAL] wake-word-worker bị panic! Thoát tiến trình để systemd tự khởi động lại...");
+                std::process::exit(1);
+            }
         })
         .expect("Failed to spawn wake-word-worker thread");
 
@@ -2248,7 +2258,7 @@ pub async fn run_wake_word_loop(
 
 ================================================================================
 TỆP 08/44: src/bin/ai-assistant/pipeline.rs
-Dung lượng: 474 dòng | 16,454 bytes
+Dung lượng: 477 dòng | 16,622 bytes
 Mô tả: Điều phối chu trình giọng nói: dò One-Breath 448ms, phát Ting non-blocking, thu âm Silero VAD, STT Whisper Vulkan, Fast-Path NLU, Ollama có chat_with_cancel, TTS streaming.
 ================================================================================
 
@@ -2289,8 +2299,9 @@ pub async fn capture_and_handle_followup(
     let mut one_breath_seed: Vec<Vec<f32>> = Vec::new();
     let mut is_one_breath = false;
 
-    // 1. Dò nhanh 448ms (14 khung) ngay sau Wake Word để xem người dùng có đang nói liền 1 hơi không
-    if allow_one_breath {
+    // 1. Dò nhanh One-Breath khi được bật qua biến môi trường AI_ASSISTANT_ONE_BREATH=1
+    let one_breath_enabled = allow_one_breath && std::env::var("AI_ASSISTANT_ONE_BREATH").is_ok();
+    if one_breath_enabled {
         if let Some(vad) = silero_vad.as_deref_mut() {
             const PROBE_FRAMES: usize = 14; // 14 x 32ms = 448ms
             let mut voice_after_tail = 0u32;
@@ -2343,7 +2354,7 @@ pub async fn capture_and_handle_followup(
             .await;
 
         play_chime(ChimeType::Wake);
-        tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
         ctx.recorder.flush();
     }
 
@@ -2401,7 +2412,9 @@ pub async fn capture_and_handle_followup(
                 .await;
 
             let stt_start = Instant::now();
-            let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
+            if std::env::var("AI_ASSISTANT_DEBUG_WAV").is_ok() {
+                let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
+            }
             println!(
                 "🎙️ Đã thu {} mẫu ({:.2}s). Bắt đầu nhận diện Whisper...",
                 followup_samples.len(),
@@ -3597,7 +3610,7 @@ pub use wakeword_engine::{UnifiedWakeWordEngine, WakeFrameStatus, WakeHit};
 
 ================================================================================
 TỆP 14/44: src/audio/capture.rs
-Dung lượng: 858 dòng | 30,547 bytes
+Dung lượng: 855 dòng | 30,454 bytes
 Mô tả: Luồng thu âm liên tục qua cpal (16kHz mono), bộ lọc Biquad HPF 100Hz, Streaming Soft-AGC (min_gain 1.0, release 0.18), và AudioRecorder thu âm Silero VAD / One-Breath.
 ================================================================================
 
@@ -4002,9 +4015,6 @@ impl ContinuousAudioStream {
         for slot in out.iter_mut() {
             *slot = self.pending_16k.pop_front().unwrap_or(0.0);
         }
-        if out.len() >= 128 {
-            self.agc.process_frame(out);
-        }
         Ok(true)
     }
 
@@ -4228,12 +4238,12 @@ impl AudioRecorder {
         self.ensure_started()?;
         vad.reset();
 
-        const SPEECH_START_PROB: f32 = 0.42;
-        const SPEECH_CONT_PROB: f32 = 0.28;
+        const SPEECH_START_PROB: f32 = 0.45;
+        const SPEECH_CONT_PROB: f32 = 0.30;
         const START_MIN_FRAMES: u32 = 2;    // 64ms liên tiếp
-        const END_SILENCE_FRAMES: u32 = 34; // ~1088ms im lặng để chốt câu (không ngắt sớm khi ngập ngừng)
-        const MIN_SPEECH_FRAMES: u32 = 8;   // ~256ms tối thiểu
-        const PREROLL_FRAMES: usize = 20;   // ~640ms đệm đầu câu
+        const END_SILENCE_FRAMES: u32 = 20; // 640ms (cắt ~450ms độ trễ sau khi người dùng dứt câu)
+        const MIN_SPEECH_FRAMES: u32 = 7;   // 224ms tối thiểu
+        const PREROLL_FRAMES: usize = 14;   // 448ms đệm đầu câu
 
         let max_wait_frames = ((initial_wait_secs * 1000.0) / 32.0).round() as u32;
         let max_speech_frames = ((max_speech_secs * 1000.0) / 32.0).round() as u32;
@@ -4462,7 +4472,7 @@ mod tests {
 
 ================================================================================
 TỆP 15/44: src/audio/stt.rs
-Dung lượng: 324 dòng | 11,308 bytes
+Dung lượng: 326 dòng | 11,389 bytes
 Mô tả: Nhận diện giọng nói Whisper in-RAM: nạp sẵn mô hình ggml-large-v3-turbo-q5_0 trên Vulkan GPU device 0, lưu giữ WhisperState cố định chống phân mảnh VRAM.
 ================================================================================
 
@@ -4649,6 +4659,8 @@ impl WhisperEngine {
         params.set_translate(false);
         params.set_initial_prompt(WHISPER_PROMPT);
         params.set_no_context(true);
+        params.set_single_segment(true);
+        params.set_no_timestamps(true);
         params.set_no_speech_thold(0.6);
         params.set_temperature(0.0);
         params.set_temperature_inc(0.0);
@@ -5090,7 +5102,7 @@ impl SileroVad {
 
 ================================================================================
 TỆP 17/44: src/audio/oww.rs
-Dung lượng: 430 dòng | 15,075 bytes
+Dung lượng: 438 dòng | 15,177 bytes
 Mô tả: openWakeWord ONNX 3 tầng (melspec, embedding, classifiers) kèm TriggerGate (ngưỡng động, boost khi phát nhạc, cooldown, kích hoạt đơn khung 80ms nhạy bén).
 ================================================================================
 
@@ -5114,11 +5126,11 @@ impl Default for OpenWakeWordConfig {
         let base_threshold = std::env::var("AI_ASSISTANT_WAKE_THRESHOLD")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.35);
+            .unwrap_or(0.45);
         Self {
             base_threshold,
             music_boost: 0.05,
-            patience_frames: 1, // Kích hoạt tức thì ở khung đỉnh (80ms), bắt nhạy giọng nói tự nhiên
+            patience_frames: 2,
             cooldown_secs: 1.5,
         }
     }
@@ -5515,8 +5527,16 @@ mod tests {
 
     #[test]
     fn test_single_frame_wake_trigger() {
-        let mut gate = TriggerGate::new(1, OpenWakeWordConfig::default());
-        // Khung đơn lẻ đạt ngưỡng nhạy (0.35) phải kích hoạt ngay lập tức
+        let mut gate = TriggerGate::new(
+            1,
+            OpenWakeWordConfig {
+                base_threshold: 0.40,
+                music_boost: 0.05,
+                patience_frames: 1,
+                cooldown_secs: 1.5,
+            },
+        );
+        // Khung đơn lẻ đạt ngưỡng khi cấu hình patience = 1 kích hoạt ngay lập tức
         assert_eq!(
             gate.evaluate(&[(WakeWordType::Alexa, 0.45)], false),
             Some((WakeWordType::Alexa, 0.45))
@@ -6478,7 +6498,7 @@ pub use router::fast_path_nlu;
 
 ================================================================================
 TỆP 24/44: src/core/nlu/router.rs
-Dung lượng: 664 dòng | 23,457 bytes
+Dung lượng: 685 dòng | 24,429 bytes
 Mô tả: Bộ định tuyến lệnh 2 tầng: Fast-Path NLU xử lý lệnh hệ thống (< 15 µs) và Deep-Path chuyển tiếp câu hỏi cho Ollama LLM.
 ================================================================================
 
@@ -7015,7 +7035,11 @@ fn fast_path_nlu_internal(
             return (true, MEMORY_MANAGER.add_note(note));
         }
     }
-    if let Some((_, rest)) = t.split_once("hãy nhớ ") {
+    if let Some((_, rest)) = t
+        .split_once("hãy nhớ ")
+        .or_else(|| t.split_once("ghi nhớ "))
+        .or_else(|| t.split_once("nhớ "))
+    {
         let fact = rest.trim();
         if !fact.is_empty() {
             if dry_run {
@@ -7048,7 +7072,8 @@ fn fast_path_nlu_internal(
         let words: Vec<&str> = t.split_whitespace().collect();
         let action_verbs = ["mở", "bật", "chạy", "vào", "nghe", "tắt", "đóng", "thoát", "kill", "phóng to", "thu nhỏ"];
         if let Some(&first) = words.first() {
-            if action_verbs.contains(&first) && words.len() <= 7 {
+            // Chỉ chặn khi câu chỉ có 1-2 từ cụt lủn (vd: "mở", "mở cái", "bật"), còn lại để LLM xử lý
+            if action_verbs.contains(&first) && words.len() <= 2 {
                 return (true, "Dạ, tôi chưa nghe rõ tên ứng dụng hoặc câu lệnh bạn yêu cầu. Bạn nói lại giúp tôi nhé?".to_string());
             }
         }
@@ -7144,12 +7169,28 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_polite_phrasing_handling() {
+        let app_index = build_app_index();
+        let (h1, r1) = fast_path_nlu("mở youtube giúp tôi", &app_index, true);
+        assert!(h1, "Failed 'mở youtube giúp tôi'");
+        assert!(r1.contains("YouTube"));
+
+        let (h2, r2) = fast_path_nlu("mở facebook lên đi", &app_index, true);
+        assert!(h2, "Failed 'mở facebook lên đi'");
+        assert!(r2.contains("Facebook"));
+
+        let (h3, r3) = fast_path_nlu("làm ơn mở visual studio code giúp mình nhé", &app_index, true);
+        assert!(h3, "Failed 'làm ơn mở visual studio code giúp mình nhé'");
+        assert!(r3.contains("Visual Studio Code") || r3.contains("code"));
+    }
 }
 
 
 ================================================================================
 TỆP 25/44: src/core/nlu/normalize.rs
-Dung lượng: 262 dòng | 13,791 bytes
+Dung lượng: 266 dòng | 14,164 bytes
 Mô tả: Chuẩn hóa chuỗi tiếng Việt, tách bỏ dấu thanh, sửa các lỗi dị âm STT đặc trưng (Má giữ tập -> mở youtube, mở gõ gồ -> mở google).
 ================================================================================
 
@@ -7347,6 +7388,10 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         (r"(?i)\b(?:quý\s*vị\s*hẹn\s*giờ)\b", "hủy hẹn giờ"),
         (r"(?i)\b(?:uốc\s*(?:xây|bay|sờ\s*bây)|quốc\s*(?:xây|bay|sờ\s*bây))\b", "workspace"),
         (r"(?i)\b(?:híp\s*(?:len|lần|lan|lơn)|hai\s*pơ\s*(?:len|lan))\b", "hyprland"),
+        // Gọt từ mở đầu lịch sự
+        (r"(?i)^(?:hãy|làm\s+ơn|cho\s+(?:tôi|mình|anh|em)|giúp\s+(?:tôi|mình))\s+", ""),
+        // Gọt hậu tố lịch sự/khẩu ngữ ở cuối câu
+        (r"(?i)\s+(?:giúp\s+(?:tôi|mình|nhé|nha)|hộ\s+(?:tôi|mình|cái)|cho\s+(?:tôi|mình)|lên\s+đi|lên\s+nhé|lên|đi|nhé|nha|với|ạ)$", ""),
     ];
 
     rules
@@ -7418,7 +7463,7 @@ mod tests {
 
 ================================================================================
 TỆP 26/44: src/core/nlu/patterns.rs
-Dung lượng: 148 dòng | 13,866 bytes
+Dung lượng: 150 dòng | 13,904 bytes
 Mô tả: Hệ thống biểu thức chính quy (Regex) biên dịch sẵn bắt các mẫu câu điều khiển: âm lượng, độ sáng, pin, ứng dụng, hẹn giờ, tìm kiếm web.
 ================================================================================
 
@@ -7561,7 +7606,9 @@ pub static TIMER_SHORT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^
 
 // Web & YouTube & Google
 pub static YT_SEARCH_RE1: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:mở|phát|bật|nghe)?\s*(?:bài hát|nhạc|video|clip)?\s*(.+?)\s*trên\s*youtube").unwrap());
-pub static YT_SEARCH_RE2: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:mở|lên|vào)\s+youtube\s+(?:tìm|xem|nghe|bài hát|nhạc|video)?\s*(.+)").unwrap());
+pub static YT_SEARCH_RE2: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(?:mở|lên|vào)\s+youtube\s+(?:và\s+|để\s+)?(?:tìm|xem|nghe|phát|mở|bài hát|nhạc|video)\s+(.+)").unwrap()
+});
 pub static GOOGLE_SEARCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^(?:tìm kiếm|tra cứu|tìm)\s+(.+?)(?:\s+(?:trên|ở|bằng)\s+(?:google|mạng|trình duyệt))?$").unwrap());
 
 // App / Web Launching
@@ -7662,7 +7709,7 @@ pub use router::{filter_thinking_content, ChatOptions, ModelDetails, ModelRouter
 
 ================================================================================
 TỆP 29/44: src/ai/ollama.rs
-Dung lượng: 204 dòng | 6,546 bytes
+Dung lượng: 216 dòng | 6,983 bytes
 Mô tả: Async HTTP client kết nối Ollama: hỗ trợ streaming SSE, lọc thẻ suy nghĩ <think>, và chat_with_cancel ngắt kết nối TCP ngay khi hủy tác vụ.
 ================================================================================
 
@@ -7812,10 +7859,22 @@ impl OllamaClient {
         let mut full_content = String::new();
         let mut is_done = false;
 
-        while let Some(chunk_res) = stream.next().await {
-            if is_cancelled() {
-                return Ok(full_content); // Drop stream -> ngắt kết nối Ollama tức thì
-            }
+        loop {
+            let next_item = tokio::select! {
+                item = stream.next() => item,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(25)) => {
+                    return Err("Ollama phản hồi quá chậm (timeout 25s)".into());
+                }
+                _ = async {
+                    while !is_cancelled() {
+                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    }
+                } => {
+                    return Ok(full_content);
+                }
+            };
+
+            let Some(chunk_res) = next_item else { break; };
             let chunk = chunk_res?;
             byte_buf.extend_from_slice(&chunk);
 
@@ -8189,13 +8248,13 @@ impl ModelRouter {
             TaskRole::Fast => ChatOptions {
                 temperature: Some(0.3),
                 num_predict: Some(120), // Ngắn gọn để đọc TTS tự nhiên trong vài giây
-                num_ctx: Some(1024),
+                num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
             TaskRole::General => ChatOptions {
                 temperature: Some(0.4),
                 num_predict: Some(200),
-                num_ctx: Some(1024),
+                num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
         }

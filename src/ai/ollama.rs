@@ -144,10 +144,22 @@ impl OllamaClient {
         let mut full_content = String::new();
         let mut is_done = false;
 
-        while let Some(chunk_res) = stream.next().await {
-            if is_cancelled() {
-                return Ok(full_content); // Drop stream -> ngắt kết nối Ollama tức thì
-            }
+        loop {
+            let next_item = tokio::select! {
+                item = stream.next() => item,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(25)) => {
+                    return Err("Ollama phản hồi quá chậm (timeout 25s)".into());
+                }
+                _ = async {
+                    while !is_cancelled() {
+                        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    }
+                } => {
+                    return Ok(full_content);
+                }
+            };
+
+            let Some(chunk_res) = next_item else { break; };
             let chunk = chunk_res?;
             byte_buf.extend_from_slice(&chunk);
 

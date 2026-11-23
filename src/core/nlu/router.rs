@@ -531,7 +531,11 @@ fn fast_path_nlu_internal(
             return (true, MEMORY_MANAGER.add_note(note));
         }
     }
-    if let Some((_, rest)) = t.split_once("hãy nhớ ") {
+    if let Some((_, rest)) = t
+        .split_once("hãy nhớ ")
+        .or_else(|| t.split_once("ghi nhớ "))
+        .or_else(|| t.split_once("nhớ "))
+    {
         let fact = rest.trim();
         if !fact.is_empty() {
             if dry_run {
@@ -564,7 +568,8 @@ fn fast_path_nlu_internal(
         let words: Vec<&str> = t.split_whitespace().collect();
         let action_verbs = ["mở", "bật", "chạy", "vào", "nghe", "tắt", "đóng", "thoát", "kill", "phóng to", "thu nhỏ"];
         if let Some(&first) = words.first() {
-            if action_verbs.contains(&first) && words.len() <= 7 {
+            // Chỉ chặn khi câu chỉ có 1-2 từ cụt lủn (vd: "mở", "mở cái", "bật"), còn lại để LLM xử lý
+            if action_verbs.contains(&first) && words.len() <= 2 {
                 return (true, "Dạ, tôi chưa nghe rõ tên ứng dụng hoặc câu lệnh bạn yêu cầu. Bạn nói lại giúp tôi nhé?".to_string());
             }
         }
@@ -659,5 +664,21 @@ mod tests {
                 cmd, reply
             );
         }
+    }
+
+    #[test]
+    fn test_polite_phrasing_handling() {
+        let app_index = build_app_index();
+        let (h1, r1) = fast_path_nlu("mở youtube giúp tôi", &app_index, true);
+        assert!(h1, "Failed 'mở youtube giúp tôi'");
+        assert!(r1.contains("YouTube"));
+
+        let (h2, r2) = fast_path_nlu("mở facebook lên đi", &app_index, true);
+        assert!(h2, "Failed 'mở facebook lên đi'");
+        assert!(r2.contains("Facebook"));
+
+        let (h3, r3) = fast_path_nlu("làm ơn mở visual studio code giúp mình nhé", &app_index, true);
+        assert!(h3, "Failed 'làm ơn mở visual studio code giúp mình nhé'");
+        assert!(r3.contains("Visual Studio Code") || r3.contains("code"));
     }
 }
