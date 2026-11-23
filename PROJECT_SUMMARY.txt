@@ -1,22 +1,36 @@
 ================================================================================
-          TỔNG HỢP & TÓM TẮT CẤU TRÚC MÃ NGUỒN DỰ ÁN VOICE AI (v3.5.1)
+          TỔNG HỢP & TÓM TẮT CẤU TRÚC MÃ NGUỒN DỰ ÁN VOICE AI (v3.5.2)
 ================================================================================
-Thời gian cập nhật: 2026-11-23 13:38:00
+Thời gian cập nhật: 2026-11-23 19:26:00
 
 1. TỔNG QUAN DỰ ÁN
 --------------------------------------------------------------------------------
 - Tên dự án: Voice AI - Native Rust Engine
-- Phiên bản: 3.5.1 (Tối ưu hóa Độ nhạy Wake Word & Loại bỏ hoàn toàn khoảng mù 2s sau Reset)
+- Phiên bản: 3.5.2
 - Ngôn ngữ & Nền tảng: Pure Rust (2021 edition), Linux (Ubuntu Wayland / X11)
 - Phần cứng tối ưu: NVIDIA GeForce RTX (Vulkan Backend) + PipeWire 1.6+ AEC WebRTC
-- Điểm nâng cấp then chốt v3.5.1:
-  1. Loại bỏ khoảng mù 2.08s sau reset: `OpenWakeWordDetector::prefill_silence()` nạp sẵn
-     khung phổ tĩnh baseline ngay khi khởi động và sau mỗi lượt reset, giúp AI phản hồi ngay khung 0.
-  2. Hiệu chỉnh phần cứng Micro ALSA Intel PCH: Hạ gain quá tải (+50dB xuống mức cân bằng +28dB),
-     triệt tiêu sóng rung 330Hz máy tính, đưa RMS tĩnh từ 0.18 về mức chuẩn 0.02.
-  3. Cơ chế Cooldown Rollback cho VAD-Gate: Khi tạp âm bị VAD chặn, cooldown 1.5s được giải phóng
-     ngay tức thì, không gây nuốt nhịp khi người dùng cất tiếng gọi "Alexa".
-  4. Ngưỡng bắt nhạy tối ưu: `AI_ASSISTANT_WAKE_THRESHOLD=0.40`, `patience_frames=1`.
+- Mục đích: Trợ lý ảo AI cục bộ siêu tốc độ (Local Voice AI Assistant), phản hồi
+  sub-microsecond với kiến trúc Fast-Path NLU, STT Whisper Large Turbo Native trên Vulkan GPU,
+  Unified Wake Word Engine (Porcupine 32ms + openWakeWord ONNX có Silero VAD-Gate),
+  cơ chế nói liền 1 hơi (One-Breath), Streaming Soft-AGC (thu xa 2-4m), điều hướng đa mô hình
+  Ollama LLM có hủy stream TCP (chat_with_cancel), Piper TTS streaming không zombie,
+  và giao diện Dynamic Island QML (Quickshell).
+
+- Các nâng cấp đột phá ở bản v3.5.2:
+  1. Loại bỏ hoàn toàn khoảng mù 2.08s sau reset: OpenWakeWordDetector::prefill_silence()
+     nạp sẵn khung phổ tĩnh baseline ngay khi khởi động và sau mỗi lượt reset, giúp AI phản hồi
+     ngay từ khung thứ 0 (0 ms delay).
+  2. Hiệu chỉnh phần cứng ALSA Intel PCH: Khóa cứng Internal Mic Boost = 0 và Capture = 40
+     (+12.75dB), kết hợp wpctl set-volume id 0.20, triệt tiêu hoàn toàn sóng ù cộng hưởng 50-70Hz,
+     đưa nhiễu nền tĩnh RMS từ 0.18 xuống mức chuẩn siêu tĩnh 0.001 - 0.005.
+  3. Cơ chế Cooldown Rollback cho VAD-Gate: Khi tạp âm đột ngột bị VAD chặn, cooldown 1.5s được
+     hủy ngay lập tức, không gây nuốt nhịp khi người dùng cất tiếng gọi từ khóa.
+  4. Nhật ký âm thanh thời gian thực (Live Voice Logging): Log trực tiếp chỉ số VAD, RMS và điểm
+     khớp openWakeWord theo từng giây (journalctl --user -u voice-ai -f), minh bạch hóa 100% việc nhận âm.
+  5. Ưu tiên khởi chạy App máy tính (Native Desktop Apps): Đảo tầng ưu tiên, mở trực tiếp các ứng dụng
+     cục bộ (Spotify, VS Code, Google Chrome, Zalo,...) thay vì mở nhầm link web trình duyệt.
+  6. Khắc phục môi trường D-Bus trong Systemd: Bổ sung DBUS_SESSION_BUS_ADDRESS và XAUTHORITY vào
+     systemd/voice-ai.service, đảm bảo mọi ứng dụng GUI kích hoạt mượt mà trên desktop Wayland/X11.
 
 
 2. SƠ ĐỒ CÂY CẤU TRÚC FILE (PROJECT DIRECTORY TREE)
@@ -26,6 +40,8 @@ voice-ai/
 ├── Cargo.lock                      # Khóa phiên bản chính xác của các thư viện phụ thuộc
 ├── DECISIONS.md                    # Tài liệu các quyết định kiến trúc (ADR-001 -> ADR-005)
 ├── README.md                       # Tài liệu hướng dẫn cài đặt và sử dụng v3.5
+├── PROJECT_SOURCE_CODE.txt         # Toàn bộ mã nguồn 43 file được đóng gói hoàn chỉnh
+├── PROJECT_SUMMARY.txt             # Báo cáo tổng hợp cấu trúc, phân tích và hướng dẫn vận hành
 ├── benches/
 │   └── bench_nlu.rs                # Benchmark hiệu năng bộ định tuyến Fast-Path NLU
 ├── docs/
@@ -33,249 +49,127 @@ voice-ai/
 │   ├── MAP.md                      # Lộ trình và trạng thái các module đã chuyển đổi
 │   └── WAKEWORD_UPGRADE_GUIDE.md   # Hướng dẫn nâng cấp mô hình openWakeWord ONNX
 ├── models/                         # Thư mục lưu trữ các mô hình AI/DSP chạy cục bộ
-│   ├── piper/                      # Mô hình Piper TTS (vi_VN-giong_nu_pho_thong-medium.onnx)
+│   ├── piper/                      # Mô hình Piper TTS (vi_VN-vcore-medium.onnx)
 │   ├── vad/                        # Mô hình Silero VAD v5 (.onnx)
-│   ├── wakeword/                   # Bộ 3 mô hình openWakeWord ONNX (melspec, embedding, classifier)
+│   ├── wakeword/                   # Bộ mô hình openWakeWord ONNX (melspec, embedding, classifier)
 │   └── whisper/                    # Mô hình Whisper STT (ggml-large-v3-turbo-q5_0.bin)
 ├── overlay/
 │   └── VoiceOverlay.qml            # Giao diện Dynamic Island QML chạy trên Quickshell
 ├── systemd/
 │   └── voice-ai.service            # File cấu hình systemd service chạy nền cùng hệ thống
-└── src/                            # TOÀN BỘ MÃ NGUỒN CỐT LÕI
+└── src/                            # TOÀN BỘ MÃ NGUỒN CỐT LÕI (Rust Core)
     ├── lib.rs                      # Thư viện gốc, khai báo & re-export các module
     ├── config.rs                   # Cấu hình tham số runtime toàn hệ thống
     ├── bin/                        # Các điểm chạy chương trình (Binaries)
     │   ├── ai-assistant/           # Binary chính (CLI daemon & client)
     │   │   ├── main.rs             # Entry point phân tích tham số lệnh CLI (clap)
-    │   │   ├── daemon.rs           # Quản lý tiến trình nền, luồng chạy, IPC server & chống query chồng
+    │   │   ├── daemon.rs           # Quản lý tiến trình nền, luồng chạy, IPC server & live voice logging
     │   │   ├── pipeline.rs         # Điều phối luồng âm thanh -> One-Breath -> STT -> NLU -> Ollama -> TTS
     │   │   ├── context.rs          # Quản lý ngữ cảnh runtime & thông số CLI (AppContext)
     │   │   ├── diagnostics.rs      # Tự kiểm tra mic, loa, mô hình AI & Ollama
-    │   │   └── platform.rs         # Nhận diện môi trường hiển thị Wayland/X11 & cấu hình gain mic an toàn
+    │   │   └── platform.rs         # Khóa cứng gain ALSA tối ưu, chống vỡ tiếng phần cứng & nhận diện Wayland
     │   └── voice-overlay.rs        # Giao diện overlay phụ trợ bằng GTK4 (tùy chọn với gtk-overlay)
     ├── audio/                      # Tầng thu âm & xử lý tín hiệu số (DSP/AI Audio)
     │   ├── mod.rs                  # Quản lý môi trường ONNX Runtime (ort) dùng chung OnceLock
-    │   ├── capture.rs              # Thu âm cpal liên tục (16kHz Mono), Biquad HPF 100Hz, Soft-AGC & Silero VAD seeded
-    │   ├── vad.rs                  # Silero VAD v5 (ONNX 512 mẫu / 32ms)
-    │   ├── oww.rs                  # openWakeWord ONNX 3 tầng & TriggerGate (ngưỡng động, single-frame 80ms)
+    │   ├── capture.rs              # Thu âm cpal liên tục (16kHz Mono), Biquad HPF 100Hz, Soft-AGC & Silero VAD
+    │   ├── vad.rs                  # Silero VAD v5 (ONNX 512 mẫu / 32ms) + Biquad HPF
+    │   ├── oww.rs                  # openWakeWord ONNX 3 tầng & TriggerGate (prefill silence, single-frame)
     │   ├── wakeword.rs             # Định nghĩa WakeWordType & phân tích từ khóa văn bản
-    │   ├── wakeword_engine.rs      # UnifiedWakeWordEngine (Porcupine 32ms + openWakeWord có Silero VAD-Gate 960ms)
-    │   └── stt.rs                  # STT Whisper Native trên Vulkan GPU (caching WhisperState cố định, 0 allocation)
-    ├── core/                       # Tầng logic xử lý ngôn ngữ & trạng thái
-    │   ├── mod.rs                  # Re-export các thành phần NLU, state, memory
-    │   ├── state.rs                # Máy trạng thái trợ lý & ghi nguyên tử alexa_state.json (AtomicU64 seq)
-    │   ├── memory.rs               # Quản lý lịch sử hội thoại ngắn hạn (3 lượt, TTL 120s)
-    │   └── nlu/                    # Fast-Path NLU (xử lý ý định ngôn ngữ tự nhiên)
-    │       ├── mod.rs              # Re-export hàm phân loại fast_path_nlu
-    │       ├── router.rs           # Định tuyến 2 tầng (Fast-Path vs Deep-Path LLM)
-    │       ├── normalize.rs        # Chuẩn hóa tiếng Việt, tách dấu, sửa dị âm (Má giữ tập -> mở youtube)
-    │       ├── patterns.rs         # Biểu thức chính quy (Regex) bắt lệnh hệ thống
-    │       └── fuzzy.rs            # So khớp mờ (sorensen_dice) các hành động chuẩn hóa canonical actions
-    ├── ai/                         # Tầng tích hợp Mô hình ngôn ngữ lớn (LLM)
-    │   ├── mod.rs                  # Re-export module AI
-    │   ├── ollama.rs               # Async Client Ollama, streaming SSE, lọc <think>, hỗ trợ chat_with_cancel
-    │   └── router.rs               # Tự động chọn model tối ưu (Fast 2B, Coder 7B, Deep/Reasoning)
-    ├── speech/                     # Tầng tổng hợp âm thanh & giọng đọc đầu ra
-    │   ├── mod.rs                  # Re-export tầng speech
-    │   ├── tts.rs                  # Piper TTS streaming không qua đĩa, thu hồi sạch tiến trình (kill_and_reap)
-    │   ├── sanitize.rs             # Làm sạch text & bộ tách câu SentenceStreamSplitter
-    │   └── chime.rs                # Phát âm báo (Ting khi nhận từ khóa, báo lỗi) qua pw-cat non-blocking
-    ├── tools/                      # Tầng công cụ điều khiển hệ thống & tiện ích
-    │   ├── mod.rs                  # Re-export các công cụ
-    │   ├── system.rs               # Âm lượng (wpctl), độ sáng, pin (/sys), chế độ nguồn
-    │   ├── apps.rs                 # Quét file .desktop (Native/Snap/Flatpak) & mở ứng dụng
-    │   ├── timer.rs                # Hẹn giờ, báo thức, đếm ngược kèm chuông thật
-    │   ├── web.rs                  # Tìm kiếm Google, YouTube, tra cứu thời tiết
-    │   └── dev.rs                  # Tiện ích cho lập trình viên (Git, Docker status)
-    └── ipc/                        # Tầng giao tiếp liên tiến trình qua Unix Domain Socket
-        ├── mod.rs                  # Re-export IPC Server/Client
-        ├── server.rs               # UDS Server tại /tmp/voice_ai_state.sock
-        └── client.rs               # UDS Client gửi lệnh từ CLI/Script vào daemon
+    │   └── wakeword_engine.rs      # UnifiedWakeWordEngine (Porcupine 32ms + openWakeWord có Silero VAD-Gate)
+    ├── ai/                         # Tầng trí tuệ nhân tạo (LLM Router & Client)
+    │   ├── mod.rs                  # Re-export các struct AI
+    │   ├── ollama.rs               # OllamaClient có chat_with_cancel (hủy stream TCP tức thì)
+    │   └── router.rs               # Điều phối 4 vai trò tác vụ (Fast, General, Reasoning, Coder)
+    ├── core/                       # Tầng lõi nghiệp vụ NLU & Trạng thái
+    │   ├── mod.rs                  # Re-export module core
+    │   ├── state.rs                # StateManager (FSM Quản lý trạng thái: Idle, Listening, Thinking, Speaking)
+    │   ├── memory.rs               # ConversationHistory (Cửa sổ trượt ghi nhớ ngữ cảnh hội thoại)
+    │   └── nlu/                    # Bộ phân tích ngôn ngữ tự nhiên cực nhanh (Fast-Path NLU)
+    │       ├── mod.rs              # Entry point NLU
+    │       ├── fuzzy.rs            # Thuật toán so khớp mờ Jaro-Winkler cho từ khóa & app
+    │       ├── normalize.rs        # Chuẩn hóa tiếng Việt, khử dấu, khử lời mở đầu/kết thúc lịch sự
+    │       ├── patterns.rs         # Hệ thống Regex biên dịch tĩnh (LazyLock)
+    │       └── router.rs           # Bộ định tuyến 15 nhóm lệnh cục bộ (Ưu tiên App > Web > System)
+    ├── ipc/                        # Giao tiếp liên tiến trình qua UNIX Domain Socket
+    │   ├── mod.rs                  # Định nghĩa định dạng gói tin IPC (IpcRequest / IpcResponse)
+    │   ├── client.rs               # IPC Client gửi lệnh nhanh (--status, --trigger, --stop, --query)
+    │   └── server.rs               # IPC Server bất đồng bộ lắng nghe tại /tmp/voice_ai_state.sock
+    ├── speech/                     # Tầng tổng hợp giọng nói & âm thanh thông báo
+    │   ├── mod.rs                  # Re-export module speech
+    │   ├── chime.rs                # Phát âm thông báo (Ting / Chime Wake) cực nhanh qua rodio/pw-play
+    │   ├── sanitize.rs             # SentenceStreamSplitter ngắt câu thông minh, khử thẻ <think>
+    │   └── tts.rs                  # PiperTts streaming trực tiếp không sinh tiến trình zombie
+    └── tools/                      # Bộ công cụ thực thi hệ thống (Native System Tools)
+        ├── mod.rs                  # Re-export tools
+        ├── apps.rs                 # Quét .desktop, fuzzy match & khởi chạy ứng dụng GUI với fallback
+        ├── dev.rs                  # Công cụ nhà phát triển: Git status, Docker containers, Java version, Kill port
+        ├── system.rs               # Điều khiển âm lượng, độ sáng, pin, RAM, CPU, power mode, Hyprland
+        ├── timer.rs                # Quản lý bộ đếm ngược hẹn giờ (TimerManager)
+        └── web.rs                  # Mở trình duyệt, tìm kiếm YouTube, Google Search, tra thời tiết wttr.in
 
 
-3. MÔ TẢ CHI TIẾT TỪNG TỆP MÃ NGUỒN (SOURCE CODE FILES)
+3. CHI TIẾT 43 TỆP MÃ NGUỒN ĐÓNG GÓI
 --------------------------------------------------------------------------------
-
-01. Cargo.toml
-    - Vai trò & Chức năng: Cấu hình build Cargo, danh sách dependencies (ort, whisper-rs Vulkan, cpal, tokio, pv_porcupine...) và features.
-
-02. systemd/voice-ai.service
-    - Vai trò & Chức năng: Cấu hình systemd user service quản lý tiến trình nền, các biến môi trường Vulkan, GPU device, mô hình Whisper và ngưỡng Wake Word.
-
-03. overlay/VoiceOverlay.qml
-    - Vai trò & Chức năng: Giao diện Dynamic Island đồ họa QML chạy qua Quickshell, hiển thị trạng thái động (idle, listening, thinking, speaking) kèm hiệu ứng sóng âm.
-
-04. src/lib.rs
-    - Vai trò & Chức năng: Entry point của thư viện Rust `voice_ai`, khai báo các module con và re-export các struct/hàm dùng chung.
-
-05. src/config.rs
-    - Vai trò & Chức năng: Định nghĩa struct `Config` lưu các hằng số mặc định: URL Ollama, Socket IPC, Sample rate 16kHz, kích thước chunk âm thanh và danh sách ứng dụng.
-
-06. src/bin/ai-assistant/main.rs
-    - Vai trò & Chức năng: Điểm vào (main) của binary `ai-assistant`: phân tích cờ CLI (clap) cho chế độ daemon, status, query, stop, relisten, benchmark.
-
-07. src/bin/ai-assistant/daemon.rs
-    - Vai trò & Chức năng: Vòng lặp tiến trình nền chính: khởi tạo IPC server, quản lý tiến trình overlay, lắng nghe luồng âm thanh 32ms và điều phối UnifiedWakeWordEngine.
-
-08. src/bin/ai-assistant/pipeline.rs
-    - Vai trò & Chức năng: Điều phối chu trình giọng nói: dò One-Breath 448ms, phát Ting non-blocking, thu âm Silero VAD, STT Whisper Vulkan, Fast-Path NLU, Ollama có chat_with_cancel, TTS streaming.
-
-09. src/bin/ai-assistant/context.rs
-    - Vai trò & Chức năng: Struct AppContext chứa tài nguyên dùng chung giữa các luồng: Config, History, AppIndex, WhisperEngine, PiperTts, StateManager.
-
-10. src/bin/ai-assistant/diagnostics.rs
-    - Vai trò & Chức năng: Công cụ chẩn đoán: kiểm tra micro/loa cpal, mô hình AI trên đĩa, kết nối Ollama server và chế độ đo trực tiếp âm thanh (audio debugger).
-
-11. src/bin/ai-assistant/platform.rs
-    - Vai trò & Chức năng: Hàm tích hợp Linux/Desktop: kiểm tra và khởi chạy Quickshell overlay, phát hiện card ALSA nội bộ, nâng gain micro lên 85% an toàn.
-
-12. src/bin/voice-overlay.rs
-    - Vai trò & Chức năng: Binary phụ trợ: giao diện overlay GTK4 dự phòng (dùng khi không có Quickshell, kích hoạt qua feature gtk-overlay).
-
-13. src/audio/mod.rs
-    - Vai trò & Chức năng: Quản lý môi trường ONNX Runtime (ort) dùng chung một lần duy nhất qua OnceLock, re-export các module âm thanh.
-
-14. src/audio/capture.rs
-    - Vai trò & Chức năng: Luồng thu âm liên tục qua cpal (16kHz mono), bộ lọc Biquad HPF 100Hz, Streaming Soft-AGC (min_gain 1.0, release 0.18), và AudioRecorder thu âm Silero VAD / One-Breath.
-
-15. src/audio/stt.rs
-    - Vai trò & Chức năng: Nhận diện giọng nói Whisper in-RAM: nạp sẵn mô hình ggml-large-v3-turbo-q5_0 trên Vulkan GPU device 0, lưu giữ WhisperState cố định chống phân mảnh VRAM.
-
-16. src/audio/vad.rs
-    - Vai trò & Chức năng: Phát hiện giọng nói Silero VAD v5 (ONNX 512 mẫu / 32ms), quản lý tensor trạng thái ẩn và ngưỡng xác suất hoạt động giọng nói.
-
-17. src/audio/oww.rs
-    - Vai trò & Chức năng: openWakeWord ONNX 3 tầng (melspec, embedding, classifiers) kèm TriggerGate (ngưỡng động, boost khi phát nhạc, cooldown, kích hoạt đơn khung 80ms nhạy bén).
-
-18. src/audio/wakeword.rs
-    - Vai trò & Chức năng: Định nghĩa enum WakeWordType (Alexa, Jarvis, Assistant), hàm detect_wake_word phân tích tiền tố/hậu tố chuỗi văn bản.
-
-19. src/audio/wakeword_engine.rs
-    - Vai trò & Chức năng: UnifiedWakeWordEngine: bộ dò từ khóa thống nhất trên khung 32ms, tự động ưu tiên Porcupine khi có key, dự phòng openWakeWord kèm Silero VAD-Gate 960ms.
-
-20. src/core/mod.rs
-    - Vai trò & Chức năng: Module cốt lõi: re-export StateManager, AssistantState, ConversationHistory và Fast-Path NLU.
-
-21. src/core/state.rs
-    - Vai trò & Chức năng: Quản lý trạng thái trợ lý (Idle, Listening, Thinking, Speaking) với chuỗi số tuần tự AtomicU64 seq và ghi nguyên tử alexa_state.json cho UI.
-
-22. src/core/memory.rs
-    - Vai trò & Chức năng: Quản lý lịch sử hội thoại trượt (sliding window 3 lượt, TTL 120 giây), tự động làm mới bộ nhớ khi hết hạn.
-
-23. src/core/nlu/mod.rs
-    - Vai trò & Chức năng: Re-export hàm fast_path_nlu phân loại ý định người dùng siêu tốc.
-
-24. src/core/nlu/router.rs
-    - Vai trò & Chức năng: Bộ định tuyến lệnh 2 tầng: Fast-Path NLU xử lý lệnh hệ thống (< 15 µs) và Deep-Path chuyển tiếp câu hỏi cho Ollama LLM.
-
-25. src/core/nlu/normalize.rs
-    - Vai trò & Chức năng: Chuẩn hóa chuỗi tiếng Việt, tách bỏ dấu thanh, sửa các lỗi dị âm STT đặc trưng (Má giữ tập -> mở youtube, mở gõ gồ -> mở google).
-
-26. src/core/nlu/patterns.rs
-    - Vai trò & Chức năng: Hệ thống biểu thức chính quy (Regex) biên dịch sẵn bắt các mẫu câu điều khiển: âm lượng, độ sáng, pin, ứng dụng, hẹn giờ, tìm kiếm web.
-
-27. src/core/nlu/fuzzy.rs
-    - Vai trò & Chức năng: So khớp mờ dựa trên thuật toán sorensen_dice cho các hành động chuẩn hóa canonical actions.
-
-28. src/ai/mod.rs
-    - Vai trò & Chức năng: Re-export module AI Ollama client và bộ định tuyến TaskRole.
-
-29. src/ai/ollama.rs
-    - Vai trò & Chức năng: Async HTTP client kết nối Ollama: hỗ trợ streaming SSE, lọc thẻ suy nghĩ <think>, và chat_with_cancel ngắt kết nối TCP ngay khi hủy tác vụ.
-
-30. src/ai/router.rs
-    - Vai trò & Chức năng: Tự động phân loại câu hỏi (Code, Reasoning, Sáng tạo, Hội thoại) để chọn model tối ưu (Fast 2B, Coder 7B, Deep/Reasoning).
-
-31. src/speech/mod.rs
-    - Vai trò & Chức năng: Re-export các thành phần âm thanh đầu ra: PiperTts, SentenceStreamSplitter, play_chime.
-
-32. src/speech/tts.rs
-    - Vai trò & Chức năng: Tổng hợp giọng đọc Piper TTS streaming qua IPC pipe thẳng sang pw-cat, hàm kill_and_reap thu dọn tiến trình triệt để chống zombie.
-
-33. src/speech/sanitize.rs
-    - Vai trò & Chức năng: Bộ tách câu SentenceStreamSplitter theo ngữ pháp tiếng Việt (bỏ qua dấu chấm thập phân, lọc <think>) và chuẩn hóa câu trước khi gửi sang TTS.
-
-34. src/speech/chime.rs
-    - Vai trò & Chức năng: Phát âm báo tức thì (Wake rising tone 880->1320Hz, Success, Error) qua pw-cat với luồng dọn tiến trình non-blocking.
-
-35. src/tools/mod.rs
-    - Vai trò & Chức năng: Re-export các công cụ thao tác hệ thống và ứng dụng.
-
-36. src/tools/system.rs
-    - Vai trò & Chức năng: Điều khiển âm lượng (wpctl), độ sáng (brightnessctl/ddcutil), kiểm tra pin (/sys/class/power_supply) và phát hiện media đang chạy.
-
-37. src/tools/apps.rs
-    - Vai trò & Chức năng: Quét và lập chỉ mục các file .desktop trên hệ thống (Native, Flatpak, Snap), khởi chạy ứng dụng mượt mà không chặn giao diện.
-
-38. src/tools/timer.rs
-    - Vai trò & Chức năng: Quản lý hẹn giờ, đếm ngược, báo thức chạy nền kèm phát chuông báo khi hết giờ.
-
-39. src/tools/web.rs
-    - Vai trò & Chức năng: Tìm kiếm web trên Google, YouTube, tra cứu thời tiết, mở URL trực tiếp qua trình duyệt mặc định.
-
-40. src/tools/dev.rs
-    - Vai trò & Chức năng: Tiện ích lập trình: kiểm tra git status, docker ps, giải phóng cổng mạng TCP (fuser/kill).
-
-41. src/ipc/mod.rs
-    - Vai trò & Chức năng: Re-export module giao tiếp liên tiến trình IPC qua Unix Domain Socket.
-
-42. src/ipc/server.rs
-    - Vai trò & Chức năng: UDS Server tại /tmp/voice_ai_state.sock: nhận lệnh từ CLI/script và đẩy sự kiện ActionRequest vào daemon.
-
-43. src/ipc/client.rs
-    - Vai trò & Chức năng: UDS Client gửi lệnh điều khiển (status, toggle, stop, relisten, ask) từ CLI vào daemon trong thời gian sub-millisecond.
-
-44. benches/bench_nlu.rs
-    - Vai trò & Chức năng: Chương trình benchmark đo kiểm hiệu năng phân loại của Fast-Path NLU trên 25 câu lệnh tiếng Việt chuẩn.
+STT  Đường dẫn file                         Mô tả chi tiết chức năng
+---  -------------------------------------  -------------------------------------------------------------
+ 1   Cargo.toml                             Cấu hình crate, tính năng (features), dependencies Rust
+ 2   systemd/voice-ai.service               File cấu hình systemd quản lý daemon chạy nền tự khởi động
+ 3   overlay/VoiceOverlay.qml               Giao diện Dynamic Island QML hiệu ứng động trên Quickshell
+ 4   src/config.rs                          Cấu hình toàn cục, đường dẫn socket, shortcuts URL & alias app
+ 5   src/lib.rs                             Khai báo root crate, export các module công khai
+ 6   src/ai/mod.rs                          Re-export các module AI (ollama, router)
+ 7   src/ai/ollama.rs                       Client gọi Ollama API, streaming token, kiểm tra ngắt 30ms
+ 8   src/ai/router.rs                       Định tuyến vai trò mô hình (Fast, General, Reasoning, Coder)
+ 9   src/audio/capture.rs                   Thu âm cpal, Biquad HPF 100Hz, resampler, Soft-AGC thu xa
+10   src/audio/mod.rs                       Khởi tạo môi trường ONNX Runtime (ort) dùng chung
+11   src/audio/oww.rs                       openWakeWord 3 tầng ONNX, prefill silence, TriggerGate nhạy
+12   src/audio/stt.rs                       Whisper STT native Vulkan GPU, transcribe_samples tối ưu
+13   src/audio/vad.rs                       Silero VAD v5 ONNX chấm điểm giọng người, SchmittTriggerVad
+14   src/audio/wakeword.rs                  Enum WakeWordType, hàm nhận diện từ khóa văn bản
+15   src/audio/wakeword_engine.rs           UnifiedWakeWordEngine kết hợp Porcupine và openWakeWord + VAD
+16   src/bin/voice-overlay.rs               Giao diện GTK4 overlay phụ trợ (khi bật feature gtk-overlay)
+17   src/bin/ai-assistant/context.rs        Struct AppContext và Args phân tích tham số CLI
+18   src/bin/ai-assistant/daemon.rs         Vòng lặp nền nghe mic, phát hiện từ khóa, log thời gian thực
+19   src/bin/ai-assistant/diagnostics.rs    Chế độ kiểm tra âm thanh trực tiếp (--debug-audio) và benchmark
+20   src/bin/ai-assistant/main.rs           Hàm main() xử lý lệnh CLI và khởi động daemon
+21   src/bin/ai-assistant/pipeline.rs       Luồng xử lý câu lệnh: Chime -> Thu âm -> Whisper -> NLU -> TTS
+22   src/bin/ai-assistant/platform.rs       Cân bằng gain ALSA phần cứng (Boost=0, Capture=40), nhận diện DE
+23   src/core/memory.rs                     Quản lý lịch sử hội thoại 10 lượt gần nhất theo cửa sổ trượt
+24   src/core/mod.rs                        Re-export các module nghiệp vụ lõi
+25   src/core/state.rs                      Quản lý trạng thái trợ lý (Idle, Listening, Thinking, Speaking)
+26   src/core/nlu/fuzzy.rs                  Thuật toán so khớp mờ Jaro-Winkler nhận diện ý định lệnh
+27   src/core/nlu/mod.rs                    Entry point phân tích ngôn ngữ tự nhiên
+28   src/core/nlu/normalize.rs              Khử dấu, loại bỏ lời mở đầu/kết thúc lịch sự tiếng Việt
+29   src/core/nlu/patterns.rs               Tập hợp Regex biên dịch tĩnh (LazyLock) cho các nhóm lệnh
+30   src/core/nlu/router.rs                 Bộ định tuyến 15 nhóm lệnh Fast-Path (Ưu tiên App > Web)
+31   src/ipc/client.rs                      Hàm gửi lệnh qua UNIX Domain Socket tới daemon nền
+32   src/ipc/mod.rs                         Định dạng gói tin IPC giao tiếp
+33   src/ipc/server.rs                      Server bất đồng bộ xử lý yêu cầu điều khiển từ client
+34   src/speech/chime.rs                    Phát âm báo thức tỉnh (Chime Wake) cực nhanh
+35   src/speech/mod.rs                      Re-export module speech
+36   src/speech/sanitize.rs                 Làm sạch văn bản cho TTS, loại bỏ Markdown, ngắt câu chuẩn
+37   src/speech/tts.rs                      Tổng hợp giọng nói Piper TTS tiếng Việt, streaming thời gian thực
+38   src/tools/apps.rs                      Quét kho ứng dụng .desktop, match app và khởi chạy tiến trình
+39   src/tools/dev.rs                       Lệnh dev: kiểm tra Git, Docker, Java, giải phóng port
+40   src/tools/mod.rs                       Re-export các công cụ hệ thống
+41   src/tools/system.rs                    Điều khiển âm lượng, độ sáng, pin, phần cứng, chế độ quạt
+42   src/tools/timer.rs                     Quản lý bộ hẹn giờ bất đồng bộ
+43   src/tools/web.rs                       Mở trình duyệt, tìm kiếm YouTube/Google, tra cứu thời tiết
 
 
-4. LUỒNG DỮ LIỆU ĐƯỜNG ỐNG XỬ LÝ 7 BƯỚC (END-TO-END PIPELINE v3.5)
+4. HƯỚNG DẪN KIỂM THỬ VÀ VẬN HÀNH
 --------------------------------------------------------------------------------
-1. THU ÂM SẠCH BẰNG PIPEWIRE ECHO-CANCELLATION:
-   Tầng PipeWire nạp sẵn module `libpipewire-module-echo-cancel` với thư viện `aec/libspa-aec-webrtc`
-   (`EchoCancel_Source` / `EchoCancel_Sink`), triệt tiêu 100% tiếng nhạc nền và tiếng đọc
-   của trợ lý lọt ngược vào micro.
+1. Kiểm tra trạng thái dịch vụ nền:
+   $ ai-assistant-rs --status
 
-2. THU ÂM NỀN (LOCK-FREE, BIQUAD HPF 100Hz & SOFT-AGC):
-   `ContinuousAudioStream` chạy trong một luồng độc lập, mở thiết bị micro qua `cpal` (16kHz Mono).
-   - Tín hiệu đi qua bộ lọc Biquad HPF @ 100Hz (triệt tiêu tiếng ù quạt tản nhiệt).
-   - Đi qua `SoftAgc` (Streaming Soft-AGC): không làm giảm âm thanh gốc (`min_gain = 1.0`),
-     tự động bù gain (`release = 0.18`, tối đa 3.5x) khi giọng nói nhỏ hoặc ở xa 2–4m.
-   - Cơ chế Watchdog kiểm tra nếu không có dữ liệu >2s thì tự động reset luồng và mở lại thiết bị.
+2. Theo dõi nhật ký nhận diện âm thanh & từ khóa thời gian thực:
+   $ journalctl --user -u voice-ai -f
 
-3. PHÁT HIỆN TỪ KHÓA ĐA TẦNG (UNIFIED WAKE WORD ENGINE 32ms):
-   Khung âm thanh 512 mẫu (32ms) được đưa qua `UnifiedWakeWordEngine`:
-   - Ưu tiên 1: Picovoice Porcupine (độ trễ siêu thấp, < 2% CPU) nếu có key.
-   - Dự phòng: openWakeWord ONNX (`OpenWakeWordDetector`) 3 tầng kết hợp `Silero VAD-Gate` (960ms):
-     Chỉ mở cổng kiểm tra khi có giọng người (`vad_prob >= 0.15`), lọc sạch tiếng gõ phím/tiếng ồn.
-     Bộ theo dõi `TriggerGate` thiết lập kích hoạt đơn khung (`patience_frames = 1`), ngưỡng nhạy 0.35,
-     bắt trọn ngữ điệu gọi tự nhiên của người Việt.
+3. Gọi thử nghiệm trực tiếp qua CLI:
+   $ ai-assistant-rs --query "Mở Spotify"
+   $ ai-assistant-rs --query "Mở Google Chrome"
+   $ ai-assistant-rs --query "Bây giờ là mấy giờ"
 
-4. CƠ CHẾ NÓI LIỀN 1 HƠI (ONE-BREATH) & CHIME NON-BLOCKING:
-   Ngay sau khi phát hiện Wake Word, hệ thống thăm dò nhanh 448ms (14 khung):
-   - Đánh giá giọng nói từ khung thứ 7 trở đi (224ms – 448ms) để loại bỏ âm đuôi "-xa" và tiếng dội phòng.
-   - Nếu người dùng nói liền câu ("Alexa mở YouTube"): bỏ qua tiếng Ting, lập tức nạp các khung đệm
-     và tiếp tục ghi âm lệnh mượt mà.
-   - Nếu người dùng dừng lại: phát chuông Ting rising tone (880Hz -> 1320Hz) qua `pw-cat` non-blocking
-     và lắng nghe câu lệnh tiếp theo với cửa sổ chờ rộng (6.0s).
-
-5. THU ÂM CÂU LỆNH & CHỐT CÂU BẰNG SILERO VAD v5:
-   Silero VAD v5 kiểm tra liên tục xác suất giọng nói (`SPEECH_START_PROB = 0.42`, `SPEECH_CONT_PROB = 0.28`).
-   - Cửa sổ chốt câu rộng 34 khung (~1.09s im lặng) giúp người dùng thoải mái ngập ngừng suy nghĩ mà không bị cắt câu.
-   - Đệm đầu câu (preroll) 20 khung (~640ms) giữ trọn vẹn từng từ đầu tiên.
-
-6. NHẬN DIỆN VĂN BẢN (WHISPER NATIVE LARGE-TURBO TRÊN VULKAN GPU):
-   Mảng PCM i16 được đưa trực tiếp vào `WhisperEngine`:
-   - Mô hình `ggml-large-v3-turbo-q5_0.bin` nạp sẵn trên Vulkan GPU device 0.
-   - Bộ đệm `WhisperState` được khởi tạo và lưu giữ cố định 1 lần duy nhất trong RAM/VRAM,
-     loại bỏ hoàn toàn chi phí tạo/hủy buffer 450MB ở mỗi lượt nói.
-   - Giải thuật giải mã `Greedy { best_of: 1 }` siêu tốc (độ trễ ~500–800ms trên GPU).
-   - Áp dụng `WHISPER_PROMPT` danh sách câu lệnh thông dụng tiếng Việt và bộ lọc ảo giác âm thanh.
-
-7. PHÂN LOẠI & THỰC THI (FAST-PATH NLU / OLLAMA LLM STREAMING):
-   Văn bản được chuẩn hóa qua `clean_user_input` (sửa triệt để dị âm như "Má giữ tập" -> "mở youtube"):
-   - Fast-Path NLU: Xử lý trong ~15µs cho các lệnh hệ thống (âm lượng, độ sáng, pin, mở app, hẹn giờ...) -> Trả kết quả ngay.
-   - Deep-Path LLM: Chuyển câu hỏi cho Ollama qua `chat_with_cancel` (ngắt kết nối TCP và hủy suy luận GPU ngay nếu có tín hiệu `--stop` / `--relisten`).
-   - TTS Streaming: Bộ tách câu `SentenceStreamSplitter` tách câu ngữ pháp tiếng Việt và đẩy trực tiếp vào Piper TTS -> pw-cat.
-   - Quản lý trạng thái: Cập nhật nguyên tử sequence number (AtomicU64) và ghi `alexa_state.json` cho giao diện Dynamic Island, tự động trả về `Idle` khi hoàn thành.
+4. Chạy toàn bộ 26 bài kiểm thử tự động:
+   $ cargo test
 ================================================================================

@@ -1,4 +1,15 @@
-=== FILE: Cargo.toml ===
+================================================================================
+         BẢN ĐÓNG GÓI MÃ NGUỒN TOÀN DIỆN DỰ ÁN VOICE AI (v3.5.2)
+================================================================================
+Thời gian đóng gói : 2026-11-23 19:25:50
+Tổng số tập tin    : 43 files (Cấu hình, Service, QML & Rust Core)
+Trạng thái kiểm thử: 26/26 Unit Tests PASS, 0 Warning
+Kho lưu trữ Git    : https://github.com/TuNgocCoder-zako/voiceAI_Rust.git
+================================================================================
+
+================================================================================
+[01/43] TỆP: Cargo.toml (53 dòng, 1,246 bytes)
+================================================================================
 [package]
 name = "voice-ai"
 version = "3.0.0"
@@ -54,7 +65,9 @@ pv_porcupine = { version = "=3.0.3", optional = true }
 criterion = { version = "0.5", features = ["html_reports"] }
 
 
-=== FILE: systemd/voice-ai.service ===
+================================================================================
+[02/43] TỆP: systemd/voice-ai.service (25 dòng, 961 bytes)
+================================================================================
 [Unit]
 Description=Voice AI Assistant Daemon (Rust Native)
 Documentation=https://github.com/TuNgocCoder-zako/voiceAI_Rust
@@ -82,7 +95,9 @@ StandardError=journal
 WantedBy=graphical-session.target
 
 
-=== FILE: overlay/VoiceOverlay.qml ===
+================================================================================
+[03/43] TỆP: overlay/VoiceOverlay.qml (1342 dòng, 63,346 bytes)
+================================================================================
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
@@ -1427,7 +1442,9 @@ ShellRoot {
 }
 
 
-=== FILE: src/config.rs ===
+================================================================================
+[04/43] TỆP: src/config.rs (87 dòng, 4,023 bytes)
+================================================================================
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -1517,7 +1534,9 @@ impl Default for Config {
 }
 
 
-=== FILE: src/lib.rs ===
+================================================================================
+[05/43] TỆP: src/lib.rs (16 dòng, 498 bytes)
+================================================================================
 pub mod config;
 pub mod core;
 pub mod ipc;
@@ -1536,7 +1555,9 @@ pub use speech::{play_chime, ChimeType, PiperTts};
 pub use tools::apps::build_app_index;
 
 
-=== FILE: src/ai/mod.rs ===
+================================================================================
+[06/43] TỆP: src/ai/mod.rs (5 dòng, 185 bytes)
+================================================================================
 pub mod ollama;
 pub mod router;
 
@@ -1544,7 +1565,9 @@ pub use ollama::{ChatMessage, OllamaClient};
 pub use router::{filter_thinking_content, ChatOptions, ModelDetails, ModelRouter, ModelTagInfo, TaskRole};
 
 
-=== FILE: src/ai/ollama.rs ===
+================================================================================
+[07/43] TỆP: src/ai/ollama.rs (215 dòng, 6,983 bytes)
+================================================================================
 use crate::ai::router::ChatOptions;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -1762,7 +1785,9 @@ impl OllamaClient {
 }
 
 
-=== FILE: src/ai/router.rs ===
+================================================================================
+[08/43] TỆP: src/ai/router.rs (374 dòng, 14,358 bytes)
+================================================================================
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
@@ -2139,7 +2164,9 @@ mod tests {
 }
 
 
-=== FILE: src/audio/capture.rs ===
+================================================================================
+[09/43] TỆP: src/audio/capture.rs (854 dòng, 30,454 bytes)
+================================================================================
 use crate::audio::vad::{HighPassFilter, SchmittTriggerVad, SileroVad};
 use crate::core::state::StateManager;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -2996,7 +3023,9 @@ mod tests {
 }
 
 
-=== FILE: src/audio/mod.rs ===
+================================================================================
+[10/43] TỆP: src/audio/mod.rs (33 dòng, 1,021 bytes)
+================================================================================
 pub mod capture;
 pub mod oww;
 pub mod stt;
@@ -3032,7 +3061,9 @@ pub use wakeword::{detect_wake_word, WakeWordType};
 pub use wakeword_engine::{UnifiedWakeWordEngine, WakeFrameStatus, WakeHit};
 
 
-=== FILE: src/audio/oww.rs ===
+================================================================================
+[11/43] TỆP: src/audio/oww.rs (510 dòng, 17,842 bytes)
+================================================================================
 use crate::audio::wakeword::WakeWordType;
 use ort::session::{builder::GraphOptimizationLevel, Session};
 use ort::value::Tensor;
@@ -3545,7 +3576,9 @@ mod tests {
 }
 
 
-=== FILE: src/audio/stt.rs ===
+================================================================================
+[12/43] TỆP: src/audio/stt.rs (325 dòng, 11,389 bytes)
+================================================================================
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -3873,7 +3906,9 @@ impl Default for WhisperEngine {
 }
 
 
-=== FILE: src/audio/vad.rs ===
+================================================================================
+[13/43] TỆP: src/audio/vad.rs (289 dòng, 9,774 bytes)
+================================================================================
 pub struct VadConfig {
     pub min_speech_ms: u32,
     pub min_silence_ms: u32,
@@ -4165,7 +4200,9 @@ impl SileroVad {
 }
 
 
-=== FILE: src/audio/wakeword.rs ===
+================================================================================
+[14/43] TỆP: src/audio/wakeword.rs (302 dòng, 12,111 bytes)
+================================================================================
 use crate::core::nlu::strip_vietnamese_accents;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -4470,7 +4507,9 @@ mod tests {
 }
 
 
-=== FILE: src/audio/wakeword_engine.rs ===
+================================================================================
+[15/43] TỆP: src/audio/wakeword_engine.rs (240 dòng, 9,007 bytes)
+================================================================================
 use crate::audio::oww::OpenWakeWordDetector;
 use crate::audio::vad::SileroVad;
 use crate::audio::wakeword::WakeWordType;
@@ -4713,7 +4752,9 @@ impl UnifiedWakeWordEngine {
 }
 
 
-=== FILE: src/bin/voice-overlay.rs ===
+================================================================================
+[16/43] TỆP: src/bin/voice-overlay.rs (383 dòng, 11,494 bytes)
+================================================================================
 use gtk4::gdk::{Display, Key};
 use gtk4::glib;
 use gtk4::prelude::*;
@@ -5099,7 +5140,9 @@ fn main() {
 }
 
 
-=== FILE: src/bin/ai-assistant/context.rs ===
+================================================================================
+[17/43] TỆP: src/bin/ai-assistant/context.rs (92 dòng, 3,524 bytes)
+================================================================================
 use clap::Parser;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -5194,7 +5237,9 @@ impl AppContext {
 }
 
 
-=== FILE: src/bin/ai-assistant/daemon.rs ===
+================================================================================
+[18/43] TỆP: src/bin/ai-assistant/daemon.rs (387 dòng, 17,254 bytes)
+================================================================================
 use super::context::AppContext;
 use std::sync::Arc;
 use std::time::Instant;
@@ -5584,7 +5629,9 @@ pub async fn run_wake_word_loop(
 }
 
 
-=== FILE: src/bin/ai-assistant/diagnostics.rs ===
+================================================================================
+[19/43] TỆP: src/bin/ai-assistant/diagnostics.rs (172 dòng, 5,964 bytes)
+================================================================================
 use std::io::{self, Write};
 use std::time::Instant;
 use voice_ai::audio::{AudioRecorder, SileroVad, UnifiedWakeWordEngine};
@@ -5759,7 +5806,9 @@ pub fn run_audio_debugger() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 
-=== FILE: src/bin/ai-assistant/main.rs ===
+================================================================================
+[20/43] TỆP: src/bin/ai-assistant/main.rs (213 dòng, 8,030 bytes)
+================================================================================
 mod context;
 mod daemon;
 mod diagnostics;
@@ -5975,7 +6024,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 
-=== FILE: src/bin/ai-assistant/pipeline.rs ===
+================================================================================
+[21/43] TỆP: src/bin/ai-assistant/pipeline.rs (476 dòng, 16,622 bytes)
+================================================================================
 use super::context::AppContext;
 use std::io::{self, Write};
 use std::time::Instant;
@@ -6454,7 +6505,9 @@ pub async fn execute_llm_query(
 }
 
 
-=== FILE: src/bin/ai-assistant/platform.rs ===
+================================================================================
+[22/43] TỆP: src/bin/ai-assistant/platform.rs (153 dòng, 5,748 bytes)
+================================================================================
 use std::path::Path;
 use std::process::Command;
 
@@ -6610,7 +6663,9 @@ pub fn ensure_mic_levels() {
 }
 
 
-=== FILE: src/core/memory.rs ===
+================================================================================
+[23/43] TỆP: src/core/memory.rs (168 dòng, 4,981 bytes)
+================================================================================
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -6781,13 +6836,17 @@ mod tests {
 }
 
 
-=== FILE: src/core/mod.rs ===
+================================================================================
+[24/43] TỆP: src/core/mod.rs (3 dòng, 44 bytes)
+================================================================================
 pub mod state;
 pub mod nlu;
 pub mod memory;
 
 
-=== FILE: src/core/state.rs ===
+================================================================================
+[25/43] TỆP: src/core/state.rs (190 dòng, 5,648 bytes)
+================================================================================
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -6980,7 +7039,9 @@ impl Default for StateManager {
 }
 
 
-=== FILE: src/core/nlu/fuzzy.rs ===
+================================================================================
+[26/43] TỆP: src/core/nlu/fuzzy.rs (68 dòng, 2,382 bytes)
+================================================================================
 use crate::core::nlu::normalize::strip_vietnamese_accents;
 use strsim::sorensen_dice;
 
@@ -7051,7 +7112,9 @@ pub fn fuzzy_match_canonical_action(text: &str, threshold: f64) -> Option<(&'sta
 }
 
 
-=== FILE: src/core/nlu/mod.rs ===
+================================================================================
+[27/43] TỆP: src/core/nlu/mod.rs (7 dòng, 165 bytes)
+================================================================================
 pub mod normalize;
 pub mod patterns;
 pub mod fuzzy;
@@ -7061,7 +7124,9 @@ pub use normalize::{clean_user_input, strip_vietnamese_accents};
 pub use router::fast_path_nlu;
 
 
-=== FILE: src/core/nlu/normalize.rs ===
+================================================================================
+[28/43] TỆP: src/core/nlu/normalize.rs (265 dòng, 14,164 bytes)
+================================================================================
 use regex::Regex;
 use std::sync::LazyLock;
 use unicode_normalization::UnicodeNormalization;
@@ -7329,7 +7394,9 @@ mod tests {
 }
 
 
-=== FILE: src/core/nlu/patterns.rs ===
+================================================================================
+[29/43] TỆP: src/core/nlu/patterns.rs (149 dòng, 13,904 bytes)
+================================================================================
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -7481,7 +7548,9 @@ pub static CLOSE_APP_MATCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(
 pub static MULTI_LAUNCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:,|\bvà\b|\bvới\b|\bvới\s+cả\b|\bcùng\s+với\b|\bcùng\b|\blẫn\b|\brồi\b|\bđồng\s+thời\b|\bvào\b)").unwrap());
 
 
-=== FILE: src/core/nlu/router.rs ===
+================================================================================
+[30/43] TỆP: src/core/nlu/router.rs (684 dòng, 24,574 bytes)
+================================================================================
 use crate::config::Config;
 use crate::core::memory::MemoryManager;
 use crate::core::nlu::fuzzy::fuzzy_match_canonical_action;
@@ -8168,7 +8237,9 @@ mod tests {
 }
 
 
-=== FILE: src/ipc/client.rs ===
+================================================================================
+[31/43] TỆP: src/ipc/client.rs (56 dòng, 1,651 bytes)
+================================================================================
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -8227,7 +8298,9 @@ pub async fn send_ipc_command_with_options<P: AsRef<Path>>(
 }
 
 
-=== FILE: src/ipc/mod.rs ===
+================================================================================
+[32/43] TỆP: src/ipc/mod.rs (5 dòng, 94 bytes)
+================================================================================
 pub mod client;
 pub mod server;
 
@@ -8235,7 +8308,9 @@ pub use client::send_ipc_command;
 pub use server::IpcServer;
 
 
-=== FILE: src/ipc/server.rs ===
+================================================================================
+[33/43] TỆP: src/ipc/server.rs (142 dòng, 6,972 bytes)
+================================================================================
 use crate::core::state::StateManager;
 use crate::ipc::client::{IpcCommand, IpcResponse};
 use std::fs;
@@ -8380,7 +8455,9 @@ impl IpcServer {
 }
 
 
-=== FILE: src/speech/chime.rs ===
+================================================================================
+[34/43] TỆP: src/speech/chime.rs (81 dòng, 2,468 bytes)
+================================================================================
 use std::io::Write;
 use std::process::{Command, Stdio};
 
@@ -8464,7 +8541,9 @@ fn append_tone(pcm: &mut Vec<i16>, freq: f64, duration_secs: f64, sample_rate: u
 }
 
 
-=== FILE: src/speech/mod.rs ===
+================================================================================
+[35/43] TỆP: src/speech/mod.rs (7 dòng, 179 bytes)
+================================================================================
 pub mod chime;
 pub mod sanitize;
 pub mod tts;
@@ -8474,7 +8553,9 @@ pub use sanitize::{sanitize_text_for_voice, SentenceStreamSplitter};
 pub use tts::PiperTts;
 
 
-=== FILE: src/speech/sanitize.rs ===
+================================================================================
+[36/43] TỆP: src/speech/sanitize.rs (299 dòng, 10,195 bytes)
+================================================================================
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -8776,7 +8857,9 @@ mod tests {
 }
 
 
-=== FILE: src/speech/tts.rs ===
+================================================================================
+[37/43] TỆP: src/speech/tts.rs (279 dòng, 9,918 bytes)
+================================================================================
 use crate::core::state::StateManager;
 use crate::speech::sanitize::sanitize_text_for_voice;
 use std::io::Write;
@@ -9058,7 +9141,9 @@ impl Default for PiperTts {
 }
 
 
-=== FILE: src/tools/apps.rs ===
+================================================================================
+[38/43] TỆP: src/tools/apps.rs (480 dòng, 15,588 bytes)
+================================================================================
 use crate::tools::system::is_hyprland;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -9541,7 +9626,9 @@ pub fn apply_workspace_preset(preset: &str, index: &AppIndex, dry_run: bool) -> 
 }
 
 
-=== FILE: src/tools/dev.rs ===
+================================================================================
+[39/43] TỆP: src/tools/dev.rs (81 dòng, 2,921 bytes)
+================================================================================
 use std::process::Command;
 
 pub fn check_port_status(port: u16) -> String {
@@ -9625,7 +9712,9 @@ pub fn get_git_status_summary() -> String {
 }
 
 
-=== FILE: src/tools/mod.rs ===
+================================================================================
+[40/43] TỆP: src/tools/mod.rs (5 dòng, 71 bytes)
+================================================================================
 pub mod system;
 pub mod apps;
 pub mod dev;
@@ -9633,7 +9722,9 @@ pub mod web;
 pub mod timer;
 
 
-=== FILE: src/tools/system.rs ===
+================================================================================
+[41/43] TỆP: src/tools/system.rs (384 dòng, 13,012 bytes)
+================================================================================
 use chrono::{Datelike, Local, Timelike};
 use std::fs;
 use std::process::{Command, Stdio};
@@ -10020,7 +10111,9 @@ pub fn get_current_media_track() -> String {
 }
 
 
-=== FILE: src/tools/timer.rs ===
+================================================================================
+[42/43] TỆP: src/tools/timer.rs (205 dòng, 6,838 bytes)
+================================================================================
 use crate::core::state::{AssistantState, StateManager};
 use crate::speech::{play_chime, ChimeType, PiperTts};
 use chrono::{Local, Timelike};
@@ -10228,7 +10321,9 @@ mod tests {
 }
 
 
-=== FILE: src/tools/web.rs ===
+================================================================================
+[43/43] TỆP: src/tools/web.rs (59 dòng, 1,957 bytes)
+================================================================================
 use std::process::Command;
 
 pub fn open_url(url: &str) -> bool {
