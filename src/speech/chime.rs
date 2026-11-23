@@ -29,9 +29,11 @@ pub fn play_chime(chime: ChimeType) {
         }
     }
 
-    // Stream raw PCM bytes directly to pw-play
-    let child = Command::new("pw-play")
+    // Stream raw PCM bytes directly to pw-cat (-p --raw)
+    let child = Command::new("pw-cat")
         .args([
+            "-p",
+            "--raw",
             "--rate",
             &sample_rate.to_string(),
             "--channels",

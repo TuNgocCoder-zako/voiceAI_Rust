@@ -41,7 +41,7 @@ pub async fn capture_and_handle_followup(
         .await;
 
     play_chime(ChimeType::Wake);
-    tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
     ctx.recorder.flush();
 
     if ctx.state_manager.is_interrupted() {
@@ -60,7 +60,11 @@ pub async fn capture_and_handle_followup(
 
     match followup_res {
         Ok(followup_samples) => {
-            if ctx.state_manager.is_interrupted() || followup_samples.len() < 3200 {
+            if ctx.state_manager.is_interrupted() {
+                return;
+            }
+            if followup_samples.len() < 3200 {
+                println!("⚠️ [VAD]: Không phát hiện giọng nói người dùng (đoạn âm thanh quá ngắn hoặc im lặng).");
                 if !ctx.state_manager.has_manual_trigger() {
                     ctx.state_manager.set_state(AssistantState::Idle, None).await;
                 }
@@ -76,27 +80,43 @@ pub async fn capture_and_handle_followup(
                 .await;
 
             let stt_start = Instant::now();
-            if std::env::var("AI_ASSISTANT_DEBUG_WAV").is_ok() {
-                let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
-            }
+            let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
+            println!(
+                "🎙️ Đã thu {} mẫu ({:.2}s). Bắt đầu nhận diện Whisper...",
+                followup_samples.len(),
+                followup_samples.len() as f32 / 16000.0
+            );
+
             let stt_res = ctx
                 .whisper
                 .transcribe_samples(&followup_samples)
                 .map_err(|e| e.to_string());
 
-            if let Ok(followup_text) = stt_res {
-                let q = followup_text.trim();
-                if !q.is_empty() {
-                    println!("👤 Bạn ({:.2?}): \"{}\"", stt_start.elapsed(), q);
-                    ctx.state_manager
-                        .set_state_full(
-                            AssistantState::Thinking,
-                            Some("Đang xử lý...".to_string()),
-                            Some(q.to_string()),
-                        )
-                        .await;
-                    execute_voice_command(ctx, q, true).await;
-                    return;
+            match stt_res {
+                Ok(followup_text) => {
+                    let q = followup_text.trim();
+                    if !q.is_empty() {
+                        println!("👤 Bạn ({:.2?}): \"{}\"", stt_start.elapsed(), q);
+                        ctx.state_manager
+                            .set_state_full(
+                                AssistantState::Thinking,
+                                Some("Đang xử lý...".to_string()),
+                                Some(q.to_string()),
+                            )
+                            .await;
+                        execute_voice_command(ctx, q, true).await;
+                        return;
+                    } else {
+                        println!(
+                            "⚠️ [Whisper STT ({:.2?})]: Không nhận diện được chữ nào (kết quả rỗng hoặc lọc nhiễu).",
+                            stt_start.elapsed()
+                        );
+                        play_chime(ChimeType::Error);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ [Whisper STT]: Lỗi nhận diện giọng nói: {}", e);
+                    play_chime(ChimeType::Error);
                 }
             }
             if !ctx.state_manager.has_manual_trigger() {
@@ -104,7 +124,7 @@ pub async fn capture_and_handle_followup(
             }
         }
         Err(err) => {
-            eprintln!("Lỗi thu âm tiếp nối: {}", err);
+            eprintln!("❌ Lỗi thu âm tiếp nối: {}", err);
             if !ctx.state_manager.has_manual_trigger() {
                 ctx.state_manager.set_state(AssistantState::Idle, None).await;
             }

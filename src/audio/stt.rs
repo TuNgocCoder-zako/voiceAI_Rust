@@ -20,8 +20,12 @@ impl WhisperEngine {
             std::env::var("AI_ASSISTANT_WHISPER_MODEL")
                 .map(PathBuf::from)
                 .unwrap_or_default(),
+            base_dir.join("models/whisper/ggml-large-v3-turbo-q5_0.bin"),
+            base_dir.join("models/whisper/ggml-large-v3-turbo.bin"),
             base_dir.join("models/whisper/ggml-small.bin"),
             base_dir.join("models/whisper/ggml-base.bin"),
+            home.join("Projects/rust/voice-ai/models/whisper/ggml-large-v3-turbo-q5_0.bin"),
+            home.join("Projects/rust/voice-ai/models/whisper/ggml-large-v3-turbo.bin"),
             home.join("Projects/rust/voice-ai/models/whisper/ggml-small.bin"),
             home.join("Projects/rust/voice-ai/models/whisper/ggml-base.bin"),
             home.join("Projects/python/voice-ai/models/whisper/ggml-small.bin"),
@@ -132,9 +136,10 @@ impl WhisperEngine {
             .create_state()
             .map_err(|e| format!("Không tạo được WhisperState: {:?}", e))?;
 
-        const WHISPER_PROMPT: &str = "mở YouTube, mở Google Chrome, mở Firefox, mở VS Code, \
-            mở Spotify, mở Facebook, mở GitHub, mở Zalo, mở Gmail, mở Terminal, \
-            tăng âm lượng, giảm âm lượng, tắt tiếng, tăng độ sáng, mấy giờ rồi, kiểm tra pin, hẹn giờ.";
+        const WHISPER_PROMPT: &str = "Xin chào, bây giờ là mấy giờ, thời tiết hôm nay thế nào, \
+            mở YouTube, mở Google Chrome, mở Firefox, mở VS Code, mở Spotify, \
+            mở Facebook, mở GitHub, mở Zalo, mở Gmail, mở Terminal, \
+            tăng âm lượng, giảm âm lượng, tắt tiếng, tăng độ sáng, kiểm tra pin, hẹn giờ.";
 
         let mut params = FullParams::new(SamplingStrategy::BeamSearch {
             beam_size: 2,

@@ -526,9 +526,9 @@ impl AudioRecorder {
         const SPEECH_START_PROB: f32 = 0.50;
         const SPEECH_CONT_PROB: f32 = 0.35;
         const START_MIN_FRAMES: u32 = 2;    // 64ms liên tiếp mới tính là bắt đầu nói
-        const END_SILENCE_FRAMES: u32 = 22; // ~704ms im lặng để chốt kết thúc câu
+        const END_SILENCE_FRAMES: u32 = 28; // ~896ms im lặng để chốt kết thúc câu (đủ thời gian ngắt nghỉ tự nhiên)
         const MIN_SPEECH_FRAMES: u32 = 8;   // ~256ms tiếng nói tối thiểu
-        const PREROLL_FRAMES: usize = 14;   // ~448ms đệm trước để không cắt chữ đầu
+        const PREROLL_FRAMES: usize = 16;   // ~512ms đệm trước để không cắt chữ đầu
 
         let max_wait_frames = ((initial_wait_secs * 1000.0) / 32.0).round() as u32;
         let max_speech_frames = ((max_speech_secs * 1000.0) / 32.0).round() as u32;

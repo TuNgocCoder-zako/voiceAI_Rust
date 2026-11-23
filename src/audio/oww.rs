@@ -18,7 +18,7 @@ impl Default for OpenWakeWordConfig {
         let base_threshold = std::env::var("AI_ASSISTANT_WAKE_THRESHOLD")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.48);
+            .unwrap_or(0.42);
         Self {
             base_threshold,
             music_boost: 0.05,
