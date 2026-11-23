@@ -147,18 +147,24 @@ pub fn find_app_in_text<'a>(text: &str, index: &'a AppIndex) -> Option<&'a Deskt
 }
 
 pub fn launch_desktop_app(app: &DesktopApp) -> bool {
+    // 1. Thử khởi chạy chuẩn Desktop thông qua gtk-launch
     if let Some(fname) = app.desktop_file.file_name() {
-        if Command::new("gtk-launch")
+        if let Ok(mut child) = Command::new("gtk-launch")
             .arg(fname)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .is_ok()
         {
-            return true;
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return true,
+                Ok(None) => return true, // Tiến trình vẫn đang sống và chạy tốt
+                _ => {} // Lỗi D-Bus hoặc gtk-launch thoát sớm -> chuyển sang chạy lệnh trực tiếp
+            }
         }
     }
 
+    // 2. Fallback: Chạy trực tiếp binary từ trường Exec trong .desktop file
     Command::new("sh")
         .arg("-c")
         .arg(format!("nohup {} >/dev/null 2>&1 &", app.exec))

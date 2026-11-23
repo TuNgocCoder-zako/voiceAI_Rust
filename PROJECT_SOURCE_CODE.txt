@@ -74,7 +74,7 @@ Environment=AI_ASSISTANT_WHISPER_MODEL=%h/Projects/rust/voice-ai/models/whisper/
 Environment=PICOVOICE_ACCESS_KEY=
 Environment=AI_ASSISTANT_PORCUPINE_SENSITIVITY=0.65
 Environment=AI_ASSISTANT_WAKE_THRESHOLD=0.35
-PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
+PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR DBUS_SESSION_BUS_ADDRESS XAUTHORITY
 StandardOutput=journal
 StandardError=journal
 
@@ -7876,53 +7876,7 @@ fn fast_path_nlu_internal(
         return (true, get_weather_info(loc));
     }
 
-    // 10. Web URL Shortcuts
-    for (site, link) in GLOBAL_CONFIG.url_shortcuts.iter() {
-        let open_phrases = [
-            format!("mở {}", site),
-            format!("mà {}", site),
-            format!("mờ {}", site),
-            format!("bật {}", site),
-            format!("vào {}", site),
-            format!("truy cập {}", site),
-            site.to_string(),
-        ];
-        if open_phrases.iter().any(|p| t == *p) {
-            if !dry_run {
-                open_url(link);
-            }
-            let name = GLOBAL_CONFIG.url_display_names.get(site).cloned().unwrap_or_else(|| site.clone());
-            return (true, format!("Đã mở {} cho bạn rồi nhé.", name));
-        }
-    }
-
-    // 11. YouTube Search
-    if let Some(caps) = YT_SEARCH_RE1.captures(&t).or_else(|| YT_SEARCH_RE2.captures(&t)) {
-        if let Some(q) = caps.get(1) {
-            let query = q.as_str().trim();
-            if !query.is_empty() {
-                if !dry_run {
-                    return (true, open_youtube_search(query));
-                }
-                return (true, format!("Đang mở {} trên YouTube cho bạn.", query));
-            }
-        }
-    }
-
-    // 12. Google Search
-    if let Some(caps) = GOOGLE_SEARCH_RE.captures(&t) {
-        if let Some(q) = caps.get(1) {
-            let query = q.as_str().trim();
-            if !query.is_empty() && query != "thông tin" {
-                if !dry_run {
-                    return (true, open_google_search(query));
-                }
-                return (true, format!("Đang tìm kiếm {} trên Google cho bạn.", query));
-            }
-        }
-    }
-
-    // 13. App Launcher (Solo or with open verb)
+    // 10. App Launcher (Ưu tiên ứng dụng cài đặt trên máy trước - ví dụ Spotify, Chrome, VS Code)
     if let Some(app) = match_app(&t, app_index) {
         if !dry_run {
             launch_desktop_app(app);
@@ -7946,6 +7900,52 @@ fn fast_path_nlu_internal(
                 launch_desktop_app(app);
             }
             return (true, format!("Đã mở {} cho bạn rồi nhé.", app.name));
+        }
+    }
+
+    // 11. Web URL Shortcuts (Mở trang web nếu không cài app hoặc dành cho các dịch vụ web)
+    for (site, link) in GLOBAL_CONFIG.url_shortcuts.iter() {
+        let open_phrases = [
+            format!("mở {}", site),
+            format!("mà {}", site),
+            format!("mờ {}", site),
+            format!("bật {}", site),
+            format!("vào {}", site),
+            format!("truy cập {}", site),
+            site.to_string(),
+        ];
+        if open_phrases.iter().any(|p| t == *p) {
+            if !dry_run {
+                open_url(link);
+            }
+            let name = GLOBAL_CONFIG.url_display_names.get(site).cloned().unwrap_or_else(|| site.clone());
+            return (true, format!("Đã mở {} cho bạn rồi nhé.", name));
+        }
+    }
+
+    // 12. YouTube Search
+    if let Some(caps) = YT_SEARCH_RE1.captures(&t).or_else(|| YT_SEARCH_RE2.captures(&t)) {
+        if let Some(q) = caps.get(1) {
+            let query = q.as_str().trim();
+            if !query.is_empty() {
+                if !dry_run {
+                    return (true, open_youtube_search(query));
+                }
+                return (true, format!("Đang mở {} trên YouTube cho bạn.", query));
+            }
+        }
+    }
+
+    // 13. Google Search
+    if let Some(caps) = GOOGLE_SEARCH_RE.captures(&t) {
+        if let Some(q) = caps.get(1) {
+            let query = q.as_str().trim();
+            if !query.is_empty() && query != "thông tin" {
+                if !dry_run {
+                    return (true, open_google_search(query));
+                }
+                return (true, format!("Đang tìm kiếm {} trên Google cho bạn.", query));
+            }
         }
     }
 
@@ -9208,18 +9208,24 @@ pub fn find_app_in_text<'a>(text: &str, index: &'a AppIndex) -> Option<&'a Deskt
 }
 
 pub fn launch_desktop_app(app: &DesktopApp) -> bool {
+    // 1. Thử khởi chạy chuẩn Desktop thông qua gtk-launch
     if let Some(fname) = app.desktop_file.file_name() {
-        if Command::new("gtk-launch")
+        if let Ok(mut child) = Command::new("gtk-launch")
             .arg(fname)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .is_ok()
         {
-            return true;
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            match child.try_wait() {
+                Ok(Some(status)) if status.success() => return true,
+                Ok(None) => return true, // Tiến trình vẫn đang sống và chạy tốt
+                _ => {} // Lỗi D-Bus hoặc gtk-launch thoát sớm -> chuyển sang chạy lệnh trực tiếp
+            }
         }
     }
 
+    // 2. Fallback: Chạy trực tiếp binary từ trường Exec trong .desktop file
     Command::new("sh")
         .arg("-c")
         .arg(format!("nohup {} >/dev/null 2>&1 &", app.exec))

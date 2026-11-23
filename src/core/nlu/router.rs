@@ -392,53 +392,7 @@ fn fast_path_nlu_internal(
         return (true, get_weather_info(loc));
     }
 
-    // 10. Web URL Shortcuts
-    for (site, link) in GLOBAL_CONFIG.url_shortcuts.iter() {
-        let open_phrases = [
-            format!("mở {}", site),
-            format!("mà {}", site),
-            format!("mờ {}", site),
-            format!("bật {}", site),
-            format!("vào {}", site),
-            format!("truy cập {}", site),
-            site.to_string(),
-        ];
-        if open_phrases.iter().any(|p| t == *p) {
-            if !dry_run {
-                open_url(link);
-            }
-            let name = GLOBAL_CONFIG.url_display_names.get(site).cloned().unwrap_or_else(|| site.clone());
-            return (true, format!("Đã mở {} cho bạn rồi nhé.", name));
-        }
-    }
-
-    // 11. YouTube Search
-    if let Some(caps) = YT_SEARCH_RE1.captures(&t).or_else(|| YT_SEARCH_RE2.captures(&t)) {
-        if let Some(q) = caps.get(1) {
-            let query = q.as_str().trim();
-            if !query.is_empty() {
-                if !dry_run {
-                    return (true, open_youtube_search(query));
-                }
-                return (true, format!("Đang mở {} trên YouTube cho bạn.", query));
-            }
-        }
-    }
-
-    // 12. Google Search
-    if let Some(caps) = GOOGLE_SEARCH_RE.captures(&t) {
-        if let Some(q) = caps.get(1) {
-            let query = q.as_str().trim();
-            if !query.is_empty() && query != "thông tin" {
-                if !dry_run {
-                    return (true, open_google_search(query));
-                }
-                return (true, format!("Đang tìm kiếm {} trên Google cho bạn.", query));
-            }
-        }
-    }
-
-    // 13. App Launcher (Solo or with open verb)
+    // 10. App Launcher (Ưu tiên ứng dụng cài đặt trên máy trước - ví dụ Spotify, Chrome, VS Code)
     if let Some(app) = match_app(&t, app_index) {
         if !dry_run {
             launch_desktop_app(app);
@@ -462,6 +416,52 @@ fn fast_path_nlu_internal(
                 launch_desktop_app(app);
             }
             return (true, format!("Đã mở {} cho bạn rồi nhé.", app.name));
+        }
+    }
+
+    // 11. Web URL Shortcuts (Mở trang web nếu không cài app hoặc dành cho các dịch vụ web)
+    for (site, link) in GLOBAL_CONFIG.url_shortcuts.iter() {
+        let open_phrases = [
+            format!("mở {}", site),
+            format!("mà {}", site),
+            format!("mờ {}", site),
+            format!("bật {}", site),
+            format!("vào {}", site),
+            format!("truy cập {}", site),
+            site.to_string(),
+        ];
+        if open_phrases.iter().any(|p| t == *p) {
+            if !dry_run {
+                open_url(link);
+            }
+            let name = GLOBAL_CONFIG.url_display_names.get(site).cloned().unwrap_or_else(|| site.clone());
+            return (true, format!("Đã mở {} cho bạn rồi nhé.", name));
+        }
+    }
+
+    // 12. YouTube Search
+    if let Some(caps) = YT_SEARCH_RE1.captures(&t).or_else(|| YT_SEARCH_RE2.captures(&t)) {
+        if let Some(q) = caps.get(1) {
+            let query = q.as_str().trim();
+            if !query.is_empty() {
+                if !dry_run {
+                    return (true, open_youtube_search(query));
+                }
+                return (true, format!("Đang mở {} trên YouTube cho bạn.", query));
+            }
+        }
+    }
+
+    // 13. Google Search
+    if let Some(caps) = GOOGLE_SEARCH_RE.captures(&t) {
+        if let Some(q) = caps.get(1) {
+            let query = q.as_str().trim();
+            if !query.is_empty() && query != "thông tin" {
+                if !dry_run {
+                    return (true, open_google_search(query));
+                }
+                return (true, format!("Đang tìm kiếm {} trên Google cho bạn.", query));
+            }
         }
     }
 
