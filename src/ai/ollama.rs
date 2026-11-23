@@ -85,11 +85,30 @@ impl OllamaClient {
         model_override: Option<&str>,
         messages: Vec<ChatMessage>,
         options: Option<ChatOptions>,
-        mut chunk_callback: F,
+        chunk_callback: F,
     ) -> Result<String, Box<dyn std::error::Error>>
     where
         F: FnMut(&str) + Send,
     {
+        self.chat_with_cancel(model_override, messages, options, chunk_callback, || false).await
+    }
+
+    pub async fn chat_with_cancel<F, C>(
+        &self,
+        model_override: Option<&str>,
+        messages: Vec<ChatMessage>,
+        options: Option<ChatOptions>,
+        mut chunk_callback: F,
+        is_cancelled: C,
+    ) -> Result<String, Box<dyn std::error::Error>>
+    where
+        F: FnMut(&str) + Send,
+        C: Fn() -> bool + Send,
+    {
+        if is_cancelled() {
+            return Ok(String::new());
+        }
+
         let target_model = model_override
             .unwrap_or(&self.default_model)
             .to_string();
@@ -102,7 +121,18 @@ impl OllamaClient {
             options,
         };
 
-        let response = self.client.post(&url).json(&payload).send().await?;
+        let send_fut = self.client.post(&url).json(&payload).send();
+        let response = tokio::select! {
+            res = send_fut => res?,
+            _ = async {
+                while !is_cancelled() {
+                    tokio::time::sleep(Duration::from_millis(30)).await;
+                }
+            } => {
+                return Ok(String::new()); // Drop send_fut -> ngắt kết nối Ollama ngay trong giai đoạn prefill
+            }
+        };
+
         if !response.status().is_success() {
             let status = response.status();
             let err_body = response.text().await.unwrap_or_default();
@@ -115,6 +145,9 @@ impl OllamaClient {
         let mut is_done = false;
 
         while let Some(chunk_res) = stream.next().await {
+            if is_cancelled() {
+                return Ok(full_content); // Drop stream -> ngắt kết nối Ollama tức thì
+            }
             let chunk = chunk_res?;
             byte_buf.extend_from_slice(&chunk);
 
@@ -147,7 +180,7 @@ impl OllamaClient {
         }
 
         // Xử lý dòng cuối nếu server đóng kết nối không kèm '\n'
-        if !is_done && !byte_buf.is_empty() {
+        if !is_done && !is_cancelled() && !byte_buf.is_empty() {
             let line = String::from_utf8_lossy(&byte_buf);
             if let Ok(data) = serde_json::from_str::<ChatChunk>(line.trim()) {
                 if let Some(msg) = data.message {
@@ -159,7 +192,7 @@ impl OllamaClient {
             }
         }
 
-        if full_content.trim().is_empty() {
+        if full_content.trim().is_empty() && !is_cancelled() {
             let fallback = "Dạ, tôi chưa tổng hợp kịp câu trả lời. Bạn hỏi lại ngắn gọn hơn giúp tôi nhé.";
             chunk_callback(fallback);
             return Ok(fallback.to_string());

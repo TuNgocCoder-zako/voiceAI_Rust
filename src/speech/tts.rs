@@ -8,6 +8,11 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::time::Duration;
 
+fn kill_and_reap(child: &mut Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 pub struct PiperTts {
     model_path: PathBuf,
     espeak_data: PathBuf,
@@ -105,7 +110,7 @@ impl PiperTts {
             Ok(child) => child,
             Err(e) => {
                 eprintln!("Không thể khởi chạy piper: {}", e);
-                let _ = pw_play.kill();
+                kill_and_reap(&mut pw_play);
                 self.is_speaking.store(false, Ordering::SeqCst);
                 return false;
             }
@@ -193,7 +198,7 @@ impl PiperTts {
                             Ok(c) => c,
                             Err(e) => {
                                 eprintln!("Không thể khởi chạy piper: {}", e);
-                                let _ = pw_play.kill();
+                                kill_and_reap(&mut pw_play);
                                 aborted = true;
                                 break;
                             }
@@ -218,8 +223,8 @@ impl PiperTts {
         let res = if let Some((mut piper, mut player, stdin)) = active {
             drop(stdin); // Đóng stdin để Piper đọc nốt câu cuối rồi thoát sạch
             if aborted {
-                let _ = piper.kill();
-                let _ = player.kill();
+                kill_and_reap(&mut piper);
+                kill_and_reap(&mut player);
                 false
             } else {
                 wait_with_interrupt(&mut piper, &mut player, state_mgr)
@@ -244,8 +249,8 @@ fn wait_with_interrupt(
         // Kiểm tra xem có tín hiệu ngắt lời khẩn cấp không
         if let Some(mgr) = state_mgr {
             if mgr.is_interrupted() {
-                let _ = piper.kill();
-                let _ = player.kill();
+                kill_and_reap(piper);
+                kill_and_reap(player);
                 return false;
             }
         }
@@ -260,7 +265,7 @@ fn wait_with_interrupt(
                 std::thread::sleep(check_interval);
             }
             Err(_) => {
-                let _ = piper.kill();
+                kill_and_reap(piper);
                 return false;
             }
         }

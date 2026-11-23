@@ -132,11 +132,9 @@ impl WhisperEngine {
             .create_state()
             .map_err(|e| format!("Không tạo được WhisperState: {:?}", e))?;
 
-        const WHISPER_PROMPT: &str = "Lệnh trợ lý ảo tiếng Việt trên Ubuntu: \
-            mở YouTube, mở Google Chrome, mở Firefox, mở Visual Studio Code, mở VS Code, \
+        const WHISPER_PROMPT: &str = "mở YouTube, mở Google Chrome, mở Firefox, mở VS Code, \
             mở Spotify, mở Facebook, mở GitHub, mở Zalo, mở Gmail, mở Terminal, \
-            tăng âm lượng, giảm âm lượng, tắt tiếng, tăng độ sáng, giảm độ sáng, \
-            mấy giờ rồi, hôm nay ngày mấy, kiểm tra pin, thời tiết hôm nay, hẹn giờ, chụp màn hình.";
+            tăng âm lượng, giảm âm lượng, tắt tiếng, tăng độ sáng, mấy giờ rồi, kiểm tra pin, hẹn giờ.";
 
         let mut params = FullParams::new(SamplingStrategy::BeamSearch {
             beam_size: 2,

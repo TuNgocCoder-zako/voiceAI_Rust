@@ -109,14 +109,6 @@ pub fn ensure_mic_levels() {
         .args(["-c", &card, "sset", "Internal Mic Boost", "1"])
         .output();
 
-    // Đồng bộ mức âm lượng và bỏ mute cho PipeWire Source / EchoCancel
-    let _ = Command::new("wpctl")
-        .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", "1.0"])
-        .output();
-    let _ = Command::new("wpctl")
-        .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "0"])
-        .output();
-
     // Nâng gain cho micro phần cứng cơ sở trong PipeWire (chống bị giảm âm lượng nguồn)
     if let Ok(out) = Command::new("wpctl").arg("status").output() {
         if let Ok(text) = String::from_utf8(out.stdout) {
@@ -130,6 +122,10 @@ pub fn ensure_mic_levels() {
                     in_sources = false;
                 }
                 if in_sources && line.contains("[vol:") {
+                    // Bỏ qua nguồn EchoCancel hoặc VoiceAI để không kéo ngược volume của EchoCancel xuống 0.85
+                    if line.contains("EchoCancel") || line.contains("VoiceAI") {
+                        continue;
+                    }
                     if let Some(token) = line.split('.').next() {
                         let id = token.trim().trim_start_matches(|c: char| !c.is_ascii_digit());
                         if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
@@ -141,4 +137,12 @@ pub fn ensure_mic_levels() {
             }
         }
     }
+
+    // Đồng bộ mức âm lượng 1.0 và bỏ mute cho PipeWire EchoCancel_Source (chạy sau cùng để đảm bảo không bị ghi đè)
+    let _ = Command::new("wpctl")
+        .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", "1.0"])
+        .output();
+    let _ = Command::new("wpctl")
+        .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "0"])
+        .output();
 }

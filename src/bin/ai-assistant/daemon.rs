@@ -97,7 +97,7 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
                 });
             }
             ActionRequest::Query { text, deep } => {
-                if ctx.tts.is_speaking() {
+                if ctx.tts.is_speaking() || ctx.state_manager.get_state_sync() != AssistantState::Idle {
                     ctx.state_manager.stop_all();
                     tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
                 }

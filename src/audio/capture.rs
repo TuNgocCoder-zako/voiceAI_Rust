@@ -331,20 +331,30 @@ impl ContinuousAudioStream {
         self.read_exact_f32_checked(out, state_mgr).unwrap_or(false)
     }
 
+    /// Đọc đủ `out.len()` mẫu 16kHz mono i16 kèm kiểm tra lỗi watchdog >2s.
+    pub fn read_exact_i16_checked(
+        &mut self,
+        out: &mut [i16],
+        state_mgr: Option<&StateManager>,
+    ) -> Result<bool, &'static str> {
+        let mut f32_buf = vec![0.0f32; out.len()];
+        let ok = self.read_exact_f32_checked(&mut f32_buf, state_mgr)?;
+        if !ok {
+            return Ok(false);
+        }
+        for (dst, &src) in out.iter_mut().zip(f32_buf.iter()) {
+            *dst = (src * 32767.0).clamp(-32768.0, 32767.0) as i16;
+        }
+        Ok(true)
+    }
+
     /// Đọc đủ `out.len()` mẫu 16kHz mono i16 đã qua resample + HPF 100Hz.
     pub fn read_exact_i16(
         &mut self,
         out: &mut [i16],
         state_mgr: Option<&StateManager>,
     ) -> bool {
-        let mut f32_buf = vec![0.0f32; out.len()];
-        if !self.read_exact_f32(&mut f32_buf, state_mgr) {
-            return false;
-        }
-        for (dst, &src) in out.iter_mut().zip(f32_buf.iter()) {
-            *dst = (src * 32767.0).clamp(-32768.0, 32767.0) as i16;
-        }
-        true
+        self.read_exact_i16_checked(out, state_mgr).unwrap_or(false)
     }
 }
 
@@ -433,12 +443,24 @@ impl AudioRecorder {
         };
 
         let mut guard = self.stream.lock().unwrap();
-        let stream = guard.as_mut().ok_or("Audio stream chưa khởi tạo")?;
+        if guard.is_none() {
+            return Err("Audio stream chưa khởi tạo".into());
+        }
 
         for i in 0..max_chunks {
             let mut chunk = vec![0i16; self.chunk_samples];
-            if !stream.read_exact_i16(&mut chunk, state_mgr) {
-                return Ok(Vec::new());
+            let read_res = {
+                let stream = guard.as_mut().ok_or("Audio stream chưa khởi tạo")?;
+                stream.read_exact_i16_checked(&mut chunk, state_mgr)
+            };
+            match read_res {
+                Ok(true) => {}
+                Ok(false) => return Ok(Vec::new()),
+                Err(reason) => {
+                    eprintln!("🔄 [cpal]: {} -> Reset luồng thu âm...", reason);
+                    *guard = None;
+                    return Err(reason.into());
+                }
             }
 
             let rms = SchmittTriggerVad::compute_rms(&chunk);
@@ -521,12 +543,24 @@ impl AudioRecorder {
         let mut silence_frames: u32 = 0;
 
         let mut guard = self.stream.lock().unwrap();
-        let stream = guard.as_mut().ok_or("Audio stream chưa khởi tạo")?;
+        if guard.is_none() {
+            return Err("Audio stream chưa khởi tạo".into());
+        }
 
         loop {
             let mut chunk = vec![0.0f32; SileroVad::CHUNK_SAMPLES];
-            if !stream.read_exact_f32(&mut chunk, state_mgr) {
-                return Ok(Vec::new());
+            let read_res = {
+                let stream = guard.as_mut().ok_or("Audio stream chưa khởi tạo")?;
+                stream.read_exact_f32_checked(&mut chunk, state_mgr)
+            };
+            match read_res {
+                Ok(true) => {}
+                Ok(false) => return Ok(Vec::new()),
+                Err(reason) => {
+                    eprintln!("🔄 [cpal]: {} -> Reset luồng thu âm...", reason);
+                    *guard = None;
+                    return Err(reason.into());
+                }
             }
 
             let prob = vad.process_chunk(&chunk).unwrap_or(0.0);

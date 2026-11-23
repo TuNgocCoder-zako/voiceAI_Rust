@@ -98,19 +98,31 @@ context.modules = [
   {
     name = libpipewire-module-echo-cancel
     args = {
+      library.name = aec/libspa-aec-webrtc
+      node.description = "VoiceAI Echo-Cancel"
+      aec.args = {
+        webrtc.gain_control = false
+        webrtc.extended_filter = true
+        webrtc.high_pass_filter = true
+        webrtc.noise_suppression = true
+      }
+      capture.props = {
+        node.name = "echo_cancel_capture"
+      }
       source.props = {
         node.name = "EchoCancel_Source"
         node.description = "VoiceAI Mic (Echo-Cancel)"
+        audio.rate = 16000
+        audio.channels = 1
+        priority.session = 1500
       }
       sink.props = {
         node.name = "EchoCancel_Sink"
         node.description = "VoiceAI Speaker (Echo-Cancel)"
+        priority.session = 10
       }
-      aec.method = "webrtc"
-      aec.args = {
-        webrtc.extended_filter = true
-        webrtc.delay_agnostic = true
-        webrtc.noise_suppression = true
+      playback.props = {
+        node.name = "echo_cancel_playback"
       }
     }
   }

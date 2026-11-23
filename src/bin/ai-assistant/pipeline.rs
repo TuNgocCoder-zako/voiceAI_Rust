@@ -76,7 +76,9 @@ pub async fn capture_and_handle_followup(
                 .await;
 
             let stt_start = Instant::now();
-            let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
+            if std::env::var("AI_ASSISTANT_DEBUG_WAV").is_ok() {
+                let _ = AudioRecorder::save_wav(&followup_samples, "/tmp/last_stt_debug.wav", 16000);
+            }
             let stt_res = ctx
                 .whisper
                 .transcribe_samples(&followup_samples)
@@ -231,34 +233,54 @@ pub async fn execute_llm_query(
 
     let mut splitter = SentenceStreamSplitter::new();
     let mut visible_acc = String::new();
+    let was_cancelled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let was_cancelled_cb = was_cancelled.clone();
 
     let stream_res = ctx
         .ollama
-        .chat_with_options(Some(&target_model), messages, Some(options), |chunk| {
-            print!("{}", chunk);
-            let _ = io::stdout().flush();
-
-            if update_ui && ctx.state_manager.is_interrupted() {
-                tts_tx_opt = None;
-                return;
-            }
-
-            let ready_sentences = splitter.push(chunk);
-            for sent in ready_sentences {
-                if !visible_acc.is_empty() {
-                    visible_acc.push(' ');
-                }
-                visible_acc.push_str(&sent);
-
-                if let Some(ref tx) = tts_tx_opt {
-                    let _ = tx.send(sent);
+        .chat_with_cancel(
+            Some(&target_model),
+            messages,
+            Some(options),
+            |chunk| {
+                if update_ui && ctx.state_manager.is_interrupted() {
+                    was_cancelled_cb.store(true, std::sync::atomic::Ordering::SeqCst);
+                    tts_tx_opt = None;
+                    return;
                 }
 
-                if update_ui {
-                    let _ = ui_tx.send(visible_acc.clone());
+                print!("{}", chunk);
+                let _ = io::stdout().flush();
+
+                let ready_sentences = splitter.push(chunk);
+                for sent in ready_sentences {
+                    if !visible_acc.is_empty() {
+                        visible_acc.push(' ');
+                    }
+                    visible_acc.push_str(&sent);
+
+                    if let Some(ref tx) = tts_tx_opt {
+                        let _ = tx.send(sent);
+                    }
+
+                    if update_ui {
+                        let _ = ui_tx.send(visible_acc.clone());
+                    }
                 }
-            }
-        })
+            },
+            {
+                let was_cancelled_poll = was_cancelled.clone();
+                let mgr = ctx.state_manager.clone();
+                move || {
+                    if update_ui && mgr.is_interrupted() {
+                        was_cancelled_poll.store(true, std::sync::atomic::Ordering::SeqCst);
+                        true
+                    } else {
+                        false
+                    }
+                }
+            },
+        )
         .await
         .map_err(|e| e.to_string());
 
@@ -281,6 +303,16 @@ pub async fn execute_llm_query(
     match stream_res {
         Ok(raw_reply) => {
             println!();
+            // Nếu đã bị ngắt bởi --stop / --relisten: chờ TTS dứt rồi thoát sạch, không ghi đè UI hay lịch sử
+            if was_cancelled.load(std::sync::atomic::Ordering::SeqCst)
+                || (update_ui && ctx.state_manager.is_interrupted())
+            {
+                if let Some(handle) = tts_handle {
+                    let _ = handle.await;
+                }
+                return;
+            }
+
             let (_thought, mut clean_reply) = voice_ai::ai::filter_thinking_content(&raw_reply);
             if clean_reply.trim().is_empty() {
                 clean_reply =

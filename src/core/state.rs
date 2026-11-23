@@ -57,8 +57,11 @@ pub struct AlexaUiState {
     pub updated_at: f64,
 }
 
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn write_ui_state_atomic(state: &AlexaUiState) {
     if let Ok(json_str) = serde_json::to_string(state) {
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
         let targets = [
             std::env::var("XDG_RUNTIME_DIR")
                 .map(|d| format!("{}/alexa_state.json", d))
@@ -67,7 +70,7 @@ fn write_ui_state_atomic(state: &AlexaUiState) {
         ];
 
         for path in targets {
-            let tmp_path = format!("{}.tmp.{}", path, std::process::id());
+            let tmp_path = format!("{}.tmp.{}.{}", path, std::process::id(), seq);
             if std::fs::write(&tmp_path, &json_str).is_ok() {
                 let _ = std::fs::rename(&tmp_path, &path);
             }
