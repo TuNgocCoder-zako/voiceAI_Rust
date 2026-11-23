@@ -3,6 +3,7 @@ pub mod oww;
 pub mod stt;
 pub mod vad;
 pub mod wakeword;
+pub mod wakeword_engine;
 
 use std::sync::OnceLock;
 use ort::environment::Environment;
@@ -29,3 +30,4 @@ pub use oww::{OpenWakeWordConfig, OpenWakeWordDetector, OwwFrameResult};
 pub use stt::WhisperEngine;
 pub use vad::{SchmittTriggerVad, SileroVad};
 pub use wakeword::{detect_wake_word, WakeWordType};
+pub use wakeword_engine::{UnifiedWakeWordEngine, WakeFrameStatus, WakeHit};

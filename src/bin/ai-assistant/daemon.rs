@@ -1,8 +1,9 @@
 use super::context::AppContext;
-use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Instant;
-use voice_ai::audio::{detect_wake_word, AudioRecorder, OpenWakeWordDetector, SileroVad, WhisperEngine};
+use voice_ai::audio::{
+    detect_wake_word, AudioRecorder, SileroVad, UnifiedWakeWordEngine, WhisperEngine,
+};
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::core::nlu::router::TIMER_MANAGER;
 use voice_ai::core::state::AssistantState;
@@ -170,15 +171,17 @@ pub async fn run_wake_word_loop(
     wake_whisper: Arc<WhisperEngine>,
 ) {
     let mut silero_vad = SileroVad::load_default();
-    let mut oww_detector = OpenWakeWordDetector::load_default();
+    let mut wake_engine = UnifiedWakeWordEngine::load_default();
 
-    if oww_detector.is_some() {
-        println!("🎧 [Hands-Free ONNX]: openWakeWord + Silero VAD đã sẵn sàng ('Alexa', 'Hey Jarvis').");
+    if let Some(engine) = wake_engine.as_ref() {
+        println!(
+            "🎧 [Hands-Free]: {} + Silero VAD đã sẵn sàng ('Alexa', 'Hey Jarvis').",
+            engine.backend_name()
+        );
     } else {
-        println!("⚠️ [Fallback]: Chưa có model openWakeWord ONNX trong models/wakeword/, tạm dùng Whisper Wake Word.");
+        println!("⚠️ [Fallback]: Chưa nạp được Wake Word Engine, tạm dùng Whisper Wake Word.");
     }
 
-    let mut oww_pcm_queue: VecDeque<f32> = VecDeque::with_capacity(2048);
     let mut last_music_check = Instant::now() - std::time::Duration::from_secs(5);
     let mut cached_music_playing = false;
 
@@ -198,13 +201,13 @@ pub async fn run_wake_word_loop(
                 &ctx,
                 "Manual Trigger",
                 silero_vad.as_mut(),
+                false,
             )
             .await;
 
-            if let Some(det) = oww_detector.as_mut() {
-                det.reset();
+            if let Some(eng) = wake_engine.as_mut() {
+                eng.reset();
             }
-            oww_pcm_queue.clear();
             ctx.recorder.flush();
             tokio::time::sleep(tokio::time::Duration::from_millis(400)).await;
             continue;
@@ -220,10 +223,9 @@ pub async fn run_wake_word_loop(
             if !ctx.state_manager.has_manual_trigger() {
                 ctx.state_manager.reset_interrupt();
             }
-            if let Some(det) = oww_detector.as_mut() {
-                det.reset();
+            if let Some(eng) = wake_engine.as_mut() {
+                eng.reset();
             }
-            oww_pcm_queue.clear();
             ctx.recorder.flush();
             continue;
         }
@@ -231,16 +233,15 @@ pub async fn run_wake_word_loop(
         // 3. Tạm nghỉ khi hệ thống đang bận xử lý / phát TTS
         if ctx.tts.is_speaking() || ctx.state_manager.get_state_sync() != AssistantState::Idle {
             tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
-            if let Some(det) = oww_detector.as_mut() {
-                det.reset();
+            if let Some(eng) = wake_engine.as_mut() {
+                eng.reset();
             }
-            oww_pcm_queue.clear();
             ctx.recorder.flush();
             continue;
         }
 
-        // 4A. NHÁNH CHÍNH: openWakeWord ONNX thời gian thực (80ms/khung, không chạy Whisper khi chờ)
-        if let Some(detector) = oww_detector.as_mut() {
+        // 4A. NHÁNH CHÍNH: UnifiedWakeWordEngine (Porcupine 32ms hoặc openWakeWord ONNX)
+        if let Some(engine) = wake_engine.as_mut() {
             if last_music_check.elapsed() >= std::time::Duration::from_secs(2) {
                 cached_music_playing = is_media_playing();
                 last_music_check = Instant::now();
@@ -249,45 +250,43 @@ pub async fn run_wake_word_loop(
             let mut frame_512 = [0.0f32; SileroVad::CHUNK_SAMPLES];
             match ctx.recorder.read_frame_f32(&mut frame_512, Some(&ctx.state_manager)) {
                 Ok(true) => {
-                    oww_pcm_queue.extend(frame_512.iter().copied());
-                    while oww_pcm_queue.len() >= OpenWakeWordDetector::FRAME_SAMPLES {
-                        let frame_1280: Vec<f32> = oww_pcm_queue
-                            .drain(..OpenWakeWordDetector::FRAME_SAMPLES)
-                            .collect();
+                    let vad_prob = silero_vad
+                        .as_mut()
+                        .and_then(|v| v.process_chunk(&frame_512).ok())
+                        .unwrap_or(1.0);
 
-                        match detector.process_frame(&frame_1280, cached_music_playing) {
-                            Ok(res) => {
-                                if let Some((ww_type, score)) = res.detected {
-                                    println!(
-                                        "\n✨ [openWakeWord: {}] Độ khớp: {:.2} (Ngưỡng: {:.2}{})",
-                                        ww_type.name(),
-                                        score,
-                                        res.active_threshold,
-                                        if cached_music_playing { " 🎵" } else { "" }
-                                    );
+                    match engine.process_frame_512(&frame_512, vad_prob, cached_music_playing) {
+                        Ok(res) => {
+                            if let Some(hit) = res.detected {
+                                println!(
+                                    "\n✨ [{}: {}] Độ khớp: {:.2} (Ngưỡng: {:.2}{})",
+                                    hit.backend,
+                                    hit.wake_word.name(),
+                                    hit.score,
+                                    res.active_threshold,
+                                    if cached_music_playing { " 🎵" } else { "" }
+                                );
 
-                                    crate::pipeline::capture_and_handle_followup(
-                                        &ctx,
-                                        &format!("Wake Word: {}", ww_type.name()),
-                                        silero_vad.as_mut(),
-                                    )
-                                    .await;
+                                crate::pipeline::capture_and_handle_followup(
+                                    &ctx,
+                                    &format!("{}: {}", hit.backend, hit.wake_word.name()),
+                                    silero_vad.as_mut(),
+                                    true, // Cho phép nói liền 1 hơi!
+                                )
+                                .await;
 
-                                    detector.reset();
-                                    oww_pcm_queue.clear();
-                                    ctx.recorder.flush();
-                                    tokio::time::sleep(tokio::time::Duration::from_millis(500))
-                                        .await;
-                                    break;
+                                engine.reset();
+                                if let Some(v) = silero_vad.as_mut() {
+                                    v.reset();
                                 }
-                            }
-                            Err(e) => {
-                                eprintln!("⚠️ Lỗi suy luận openWakeWord: {}", e);
+                                ctx.recorder.flush();
+                                tokio::time::sleep(tokio::time::Duration::from_millis(350)).await;
                             }
                         }
+                        Err(e) => eprintln!("⚠️ Lỗi Wake Word ({}): {}", engine.backend_name(), e),
                     }
                 }
-                Ok(false) => continue, // Bị ngắt bởi --trigger / --stop
+                Ok(false) => continue,
                 Err(e) => {
                     eprintln!("Lỗi đọc luồng audio cpal: {}", e);
                     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
@@ -321,6 +320,7 @@ pub async fn run_wake_word_loop(
                                     &ctx,
                                     &format!("Wake Word: {}", wake_word.name()),
                                     silero_vad.as_mut(),
+                                    false,
                                 )
                                 .await;
                             } else {

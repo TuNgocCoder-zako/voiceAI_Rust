@@ -88,11 +88,86 @@ impl StreamResampler {
     }
 }
 
+/// Bộ khuếch đại mềm theo luồng (Streaming Soft-AGC) tối ưu cho thu giọng khoảng cách xa (2–4m).
+/// Giữ im lặng khi chỉ có nhiễu nền thấp (noise gate), tăng chậm khi giọng xa và giảm nhanh khi giọng gần.
+pub struct SoftAgc {
+    target_rms: f32,
+    noise_floor_rms: f32,
+    max_gain: f32,
+    min_gain: f32,
+    attack: f32,
+    release: f32,
+    current_gain: f32,
+}
+
+impl SoftAgc {
+    pub fn new() -> Self {
+        Self {
+            target_rms: 0.08,
+            noise_floor_rms: 0.004,
+            max_gain: 3.5,
+            min_gain: 0.5,
+            attack: 0.35,
+            release: 0.06,
+            current_gain: 1.0,
+        }
+    }
+
+    pub fn current_gain(&self) -> f32 {
+        self.current_gain
+    }
+
+    /// Khuếch đại tại chỗ 1 khung f32 [-1.0, 1.0] và trả về mức RMS sau xử lý
+    pub fn process_frame(&mut self, frame: &mut [f32]) -> f32 {
+        if frame.is_empty() {
+            return 0.0;
+        }
+
+        let sum_sq: f32 = frame.iter().map(|&s| s * s).sum();
+        let rms = (sum_sq / frame.len() as f32).sqrt();
+
+        let desired_gain = if rms < self.noise_floor_rms {
+            // Không khuếch đại tiếng ồn phòng yên tĩnh, kéo gain từ từ về 1.0
+            1.0
+        } else {
+            (self.target_rms / rms).clamp(self.min_gain, self.max_gain)
+        };
+
+        let alpha = if desired_gain < self.current_gain {
+            self.attack
+        } else {
+            self.release
+        };
+        self.current_gain += alpha * (desired_gain - self.current_gain);
+
+        let mut out_sq = 0.0f32;
+        for s in frame.iter_mut() {
+            // Soft-clipping (tanh nhẹ) khi tín hiệu vượt 0.90 để không vỡ tiếng khi nói gần
+            let scaled = *s * self.current_gain;
+            let limited = if scaled.abs() > 0.90 {
+                scaled.tanh()
+            } else {
+                scaled
+            };
+            *s = limited.clamp(-0.98, 0.98);
+            out_sq += *s * *s;
+        }
+        (out_sq / frame.len() as f32).sqrt()
+    }
+}
+
+impl Default for SoftAgc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Luồng thu âm cpal sống suốt vòng đời daemon, không bao giờ spawn/kill tiến trình ngoài.
 pub struct ContinuousAudioStream {
     consumer: HeapCons<f32>,
     resampler: StreamResampler,
     hpf: HighPassFilter,
+    agc: SoftAgc,
     pending_16k: VecDeque<f32>,
     native_rate: u32,
     stop_flag: Arc<AtomicBool>,
@@ -246,6 +321,7 @@ impl ContinuousAudioStream {
             consumer,
             resampler: StreamResampler::new(native_rate, TARGET_SAMPLE_RATE),
             hpf: HighPassFilter::new(),
+            agc: SoftAgc::new(),
             pending_16k: VecDeque::with_capacity(TARGET_SAMPLE_RATE as usize),
             native_rate,
             stop_flag,
@@ -317,6 +393,9 @@ impl ContinuousAudioStream {
 
         for slot in out.iter_mut() {
             *slot = self.pending_16k.pop_front().unwrap_or(0.0);
+        }
+        if out.len() >= 128 {
+            self.agc.process_frame(out);
         }
         Ok(true)
     }
@@ -512,7 +591,6 @@ impl AudioRecorder {
         Ok(full_samples)
     }
 
-    /// Thu câu lệnh chính xác bằng Silero VAD v5 (khung 32ms, 450ms pre-roll, chống nhiễu phím cơ).
     pub fn record_command_with_silero(
         &self,
         vad: &mut SileroVad,
@@ -520,15 +598,34 @@ impl AudioRecorder {
         max_speech_secs: f32,
         state_mgr: Option<&StateManager>,
     ) -> Result<Vec<i16>, Box<dyn std::error::Error>> {
+        self.record_command_with_silero_seeded(
+            vad,
+            &[],
+            initial_wait_secs,
+            max_speech_secs,
+            state_mgr,
+        )
+    }
+
+    /// Thu câu lệnh bằng Silero VAD v5; nếu `seed_frames` không rỗng (chế độ nói liền 1 hơi),
+    /// giữ nguyên toàn bộ các khung đầu câu đã nói ngay sau Wake Word.
+    pub fn record_command_with_silero_seeded(
+        &self,
+        vad: &mut SileroVad,
+        seed_frames: &[Vec<f32>],
+        initial_wait_secs: f32,
+        max_speech_secs: f32,
+        state_mgr: Option<&StateManager>,
+    ) -> Result<Vec<i16>, Box<dyn std::error::Error>> {
         self.ensure_started()?;
         vad.reset();
 
-        const SPEECH_START_PROB: f32 = 0.50;
-        const SPEECH_CONT_PROB: f32 = 0.35;
-        const START_MIN_FRAMES: u32 = 2;    // 64ms liên tiếp mới tính là bắt đầu nói
-        const END_SILENCE_FRAMES: u32 = 28; // ~896ms im lặng để chốt kết thúc câu (đủ thời gian ngắt nghỉ tự nhiên)
-        const MIN_SPEECH_FRAMES: u32 = 8;   // ~256ms tiếng nói tối thiểu
-        const PREROLL_FRAMES: usize = 16;   // ~512ms đệm trước để không cắt chữ đầu
+        const SPEECH_START_PROB: f32 = 0.45;
+        const SPEECH_CONT_PROB: f32 = 0.32;
+        const START_MIN_FRAMES: u32 = 2;    // 64ms liên tiếp
+        const END_SILENCE_FRAMES: u32 = 22; // ~704ms im lặng để chốt câu (giữ trọn âm cuối)
+        const MIN_SPEECH_FRAMES: u32 = 8;   // ~256ms tối thiểu
+        const PREROLL_FRAMES: usize = 18;   // ~576ms đệm đầu câu
 
         let max_wait_frames = ((initial_wait_secs * 1000.0) / 32.0).round() as u32;
         let max_speech_frames = ((max_speech_secs * 1000.0) / 32.0).round() as u32;
@@ -542,10 +639,19 @@ impl AudioRecorder {
         let mut spoken_frames: u32 = 0;
         let mut silence_frames: u32 = 0;
 
-        let mut guard = self.stream.lock().unwrap();
-        if guard.is_none() {
-            return Err("Audio stream chưa khởi tạo".into());
+        // Nạp khung mồi (One-Breath) và làm ấm trạng thái ẩn của Silero VAD
+        if !seed_frames.is_empty() {
+            has_spoken = true;
+            for frame in seed_frames {
+                if frame.len() == SileroVad::CHUNK_SAMPLES {
+                    let _ = vad.process_chunk(frame);
+                }
+                recorded_f32.extend_from_slice(frame);
+                spoken_frames += 1;
+            }
         }
+
+        let mut guard = self.stream.lock().unwrap();
 
         loop {
             let mut chunk = vec![0.0f32; SileroVad::CHUNK_SAMPLES];
@@ -726,5 +832,21 @@ mod tests {
             r.push_sample(s, &mut out);
         }
         assert!((out.len() as i32 - 1600).abs() <= 2, "Got {}", out.len());
+    }
+
+    #[test]
+    fn test_soft_agc_far_field_and_noise_gate() {
+        let mut agc = SoftAgc::new();
+        // Nhiễu nền cực nhỏ (< 0.004) không bị khuếch đại
+        let mut quiet = vec![0.001f32; 512];
+        agc.process_frame(&mut quiet);
+        assert!((agc.current_gain() - 1.0).abs() < 0.05);
+
+        // Giọng nói xa yếu (0.015) được nâng dần lên rõ rệt
+        for _ in 0..30 {
+            let mut far_voice = vec![0.015f32; 512];
+            agc.process_frame(&mut far_voice);
+        }
+        assert!(agc.current_gain() > 2.0 && agc.current_gain() <= 3.5);
     }
 }

@@ -1,7 +1,7 @@
 use super::context::AppContext;
 use std::io::{self, Write};
 use std::time::Instant;
-use voice_ai::audio::{AudioRecorder, SileroVad};
+use voice_ai::audio::{detect_wake_word, AudioRecorder, SileroVad};
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::core::state::AssistantState;
 use voice_ai::speech::{play_chime, ChimeType, SentenceStreamSplitter};
@@ -30,28 +30,84 @@ pub async fn capture_and_handle_followup(
     ctx: &AppContext,
     source_label: &str,
     mut silero_vad: Option<&mut SileroVad>,
+    allow_one_breath: bool,
 ) {
-    println!("\n🔔 [{}] Đang lắng nghe câu lệnh tiếp theo...", source_label);
-    ctx.state_manager
-        .set_state_full(
-            AssistantState::Listening,
-            Some("Đang lắng nghe...".to_string()),
-            None,
-        )
-        .await;
+    let mut one_breath_seed: Vec<Vec<f32>> = Vec::new();
+    let mut is_one_breath = false;
 
-    play_chime(ChimeType::Wake);
-    tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
-    ctx.recorder.flush();
+    // 1. Dò nhanh 320ms ngay sau Wake Word để xem người dùng có đang nói liền 1 hơi không
+    if allow_one_breath {
+        if let Some(vad) = silero_vad.as_deref_mut() {
+            const PROBE_FRAMES: usize = 10; // 10 x 32ms = 320ms
+            let mut voice_after_wake = 0u32;
+
+            for i in 0..PROBE_FRAMES {
+                if ctx.state_manager.is_interrupted() {
+                    return;
+                }
+                let mut f = vec![0.0f32; SileroVad::CHUNK_SAMPLES];
+                match ctx.recorder.read_frame_f32(&mut f, Some(&ctx.state_manager)) {
+                    Ok(true) => {
+                        let p = vad.process_chunk(&f).unwrap_or(0.0);
+                        if i >= 3 && p >= 0.45 {
+                            voice_after_wake += 1;
+                        }
+                        one_breath_seed.push(f);
+                    }
+                    _ => break,
+                }
+            }
+
+            if voice_after_wake >= 3 {
+                is_one_breath = true;
+            }
+        }
+    }
+
+    if is_one_breath {
+        println!("\n⚡ [{} | One-Breath] Đang thu câu lệnh liền mạch...", source_label);
+        ctx.state_manager
+            .set_state_full(
+                AssistantState::Listening,
+                Some("Đang nghe liền mạch...".to_string()),
+                None,
+            )
+            .await;
+    } else {
+        println!("\n🔔 [{}] Đang lắng nghe câu lệnh tiếp theo...", source_label);
+        ctx.state_manager
+            .set_state_full(
+                AssistantState::Listening,
+                Some("Đang lắng nghe...".to_string()),
+                None,
+            )
+            .await;
+
+        play_chime(ChimeType::Wake);
+        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        ctx.recorder.flush();
+    }
 
     if ctx.state_manager.is_interrupted() {
         return;
     }
 
     let followup_res = if let Some(vad) = silero_vad.as_deref_mut() {
-        ctx.recorder
-            .record_command_with_silero(vad, 4.5, 10.0, Some(&ctx.state_manager))
-            .map_err(|e| e.to_string())
+        if is_one_breath {
+            ctx.recorder
+                .record_command_with_silero_seeded(
+                    vad,
+                    &one_breath_seed,
+                    1.5,
+                    10.0,
+                    Some(&ctx.state_manager),
+                )
+                .map_err(|e| e.to_string())
+        } else {
+            ctx.recorder
+                .record_command_with_silero(vad, 4.5, 10.0, Some(&ctx.state_manager))
+                .map_err(|e| e.to_string())
+        }
     } else {
         ctx.recorder
             .record(8.0, Some(&ctx.state_manager))
@@ -94,17 +150,24 @@ pub async fn capture_and_handle_followup(
 
             match stt_res {
                 Ok(followup_text) => {
-                    let q = followup_text.trim();
+                    let mut q = followup_text.trim().to_string();
+                    // Nếu chế độ One-Breath còn dính tiền tố từ khóa (vd: "Alexa mở YouTube") -> cắt sạch
+                    if is_one_breath && !q.is_empty() {
+                        if let Some((_, stripped)) = detect_wake_word(&q) {
+                            q = stripped;
+                        }
+                    }
+
                     if !q.is_empty() {
                         println!("👤 Bạn ({:.2?}): \"{}\"", stt_start.elapsed(), q);
                         ctx.state_manager
                             .set_state_full(
                                 AssistantState::Thinking,
                                 Some("Đang xử lý...".to_string()),
-                                Some(q.to_string()),
+                                Some(q.clone()),
                             )
                             .await;
-                        execute_voice_command(ctx, q, true).await;
+                        execute_voice_command(ctx, &q, true).await;
                         return;
                     } else {
                         println!(

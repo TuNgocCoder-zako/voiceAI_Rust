@@ -1,7 +1,6 @@
-use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::time::Instant;
-use voice_ai::audio::{AudioRecorder, OpenWakeWordDetector, SileroVad};
+use voice_ai::audio::{AudioRecorder, SileroVad, UnifiedWakeWordEngine};
 use voice_ai::core::nlu::fast_path_nlu;
 use voice_ai::tools::apps::build_app_index;
 use voice_ai::tools::system::is_media_playing;
@@ -117,13 +116,14 @@ pub fn run_audio_debugger() -> Result<(), Box<dyn std::error::Error>> {
     let recorder = AudioRecorder::new();
     let mut vad = SileroVad::load_default()
         .ok_or("Chưa thấy models/vad/silero_vad.onnx")?;
-    let mut oww = OpenWakeWordDetector::load_default()
-        .ok_or("Chưa thấy thư mục models/wakeword/")?;
+    let mut wake = UnifiedWakeWordEngine::load_default()
+        .ok_or("Không khởi tạo được Porcupine hoặc openWakeWord")?;
 
-    println!("🔬 Chế độ kiểm tra âm thanh trực tiếp (Ctrl+C để thoát)...");
-    println!("   Thử gõ phím, mở nhạc và gọi 'Alexa' / 'Hey Jarvis' để quan sát chỉ số.\n");
+    println!(
+        "🔬 Chế độ kiểm tra âm thanh trực tiếp [Backend: {}] (Ctrl+C để thoát)...",
+        wake.backend_name()
+    );
 
-    let mut oww_queue: VecDeque<f32> = VecDeque::with_capacity(2048);
     let mut last_music_check = Instant::now() - std::time::Duration::from_secs(5);
     let mut music_playing = false;
 
@@ -138,42 +138,34 @@ pub fn run_audio_debugger() -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
 
+        let rms = (frame.iter().map(|&s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
         let vad_prob = vad.process_chunk(&frame)?;
-        oww_queue.extend(frame.iter().copied());
+        let res = wake.process_frame_512(&frame, vad_prob, music_playing)?;
 
-        if oww_queue.len() >= OpenWakeWordDetector::FRAME_SAMPLES {
-            let chunk_1280: Vec<f32> = oww_queue
-                .drain(..OpenWakeWordDetector::FRAME_SAMPLES)
-                .collect();
-            let res = oww.process_frame(&chunk_1280, music_playing)?;
+        let bar_len = (vad_prob * 10.0).round() as usize;
+        let bar = format!(
+            "{}{}",
+            "█".repeat(bar_len.min(10)),
+            "░".repeat(10usize.saturating_sub(bar_len))
+        );
 
-            let score_str = res
-                .scores
-                .iter()
-                .map(|(t, s)| format!("{}: {:.2}", t.name(), s))
-                .collect::<Vec<_>>()
-                .join(" | ");
+        print!(
+            "\r🎙️ RMS: {:.3} | VAD: [{}] {:.2} | {} {}   ",
+            rms,
+            bar,
+            vad_prob,
+            if res.debug_summary.is_empty() { "warmup..." } else { &res.debug_summary },
+            if music_playing { "🎵" } else { "" }
+        );
+        let _ = io::stdout().flush();
 
-            let bar_len = (vad_prob * 10.0).round() as usize;
-            let bar = format!(
-                "{}{}",
-                "█".repeat(bar_len.min(10)),
-                "░".repeat(10usize.saturating_sub(bar_len))
+        if let Some(hit) = res.detected {
+            println!(
+                "\n🔔 PHÁT HIỆN WAKE WORD [{}]: {} (score = {:.2})!",
+                hit.backend,
+                hit.wake_word.name(),
+                hit.score
             );
-
-            print!(
-                "\r🎙️ VAD: [{}] {:.2} | {} (Ngưỡng: {:.2}{})   ",
-                bar,
-                vad_prob,
-                if score_str.is_empty() { "warmup..." } else { &score_str },
-                res.active_threshold,
-                if music_playing { " 🎵" } else { "" }
-            );
-            let _ = io::stdout().flush();
-
-            if let Some((ww, sc)) = res.detected {
-                println!("\n🔔 PHÁT HIỆN WAKE WORD: {} (score = {:.2})!", ww.name(), sc);
-            }
         }
     }
     Ok(())

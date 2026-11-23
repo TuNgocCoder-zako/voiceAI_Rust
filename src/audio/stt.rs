@@ -107,9 +107,21 @@ impl WhisperEngine {
                 .model_path
                 .to_str()
                 .ok_or("Đường dẫn model Whisper không phải UTF-8 hợp lệ")?;
-            let ctx = WhisperContext::new_with_params(model_str, WhisperContextParameters::default())
+            let mut cparams = WhisperContextParameters::default();
+            let use_gpu = std::env::var("AI_ASSISTANT_WHISPER_CPU_ONLY").is_err();
+            cparams.use_gpu(use_gpu);
+            if let Ok(dev) = std::env::var("AI_ASSISTANT_WHISPER_GPU")
+                .and_then(|v| v.parse::<i32>().map_err(|_| std::env::VarError::NotPresent))
+            {
+                cparams.gpu_device(dev);
+            }
+            let ctx = WhisperContext::new_with_params(model_str, cparams)
                 .map_err(|e| format!("Lỗi nạp WhisperContext ({:?}): {:?}", self.model_path, e))?;
-            println!("⚡ [Whisper Native RAM]: Đã nạp sẵn model {:?} vào bộ nhớ.", self.model_path);
+            println!(
+                "⚡ [Whisper Native {}]: Đã nạp sẵn model {:?}.",
+                if use_gpu { "Vulkan GPU" } else { "CPU RAM" },
+                self.model_path
+            );
             *guard = Some(ctx);
         }
         Ok(())
@@ -141,15 +153,29 @@ impl WhisperEngine {
             mở Facebook, mở GitHub, mở Zalo, mở Gmail, mở Terminal, \
             tăng âm lượng, giảm âm lượng, tắt tiếng, tăng độ sáng, kiểm tra pin, hẹn giờ.";
 
-        let mut params = FullParams::new(SamplingStrategy::BeamSearch {
-            beam_size: 2,
-            patience: -1.0,
-        });
+        let is_turbo_or_large = self
+            .model_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.contains("turbo") || n.contains("large"))
+            .unwrap_or(false);
+
+        let strategy = if is_turbo_or_large {
+            SamplingStrategy::Greedy { best_of: 1 }
+        } else {
+            SamplingStrategy::BeamSearch {
+                beam_size: 2,
+                patience: -1.0,
+            }
+        };
+
+        let mut params = FullParams::new(strategy);
         params.set_n_threads(self.threads as i32);
         params.set_language(Some("vi"));
         params.set_translate(false);
         params.set_initial_prompt(WHISPER_PROMPT);
         params.set_no_context(true);
+        params.set_no_speech_thold(0.6);
         params.set_temperature(0.0);
         params.set_temperature_inc(0.0);
         params.set_suppress_blank(true);
