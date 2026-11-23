@@ -1,12 +1,12 @@
 ================================================================================
-          TỔNG HỢP & TÓM TẮT CẤU TRÚC MÃ NGUỒN DỰ ÁN VOICE AI (v3.5.2)
+          TỔNG HỢP & TÓM TẮT CẤU TRÚC MÃ NGUỒN DỰ ÁN VOICE AI (v3.5.3)
 ================================================================================
-Thời gian cập nhật: 2026-11-23 19:26:00
+Thời gian cập nhật: 2026-11-23 19:57:30
 
 1. TỔNG QUAN DỰ ÁN
 --------------------------------------------------------------------------------
 - Tên dự án: Voice AI - Native Rust Engine
-- Phiên bản: 3.5.2
+- Phiên bản: 3.5.3
 - Ngôn ngữ & Nền tảng: Pure Rust (2021 edition), Linux (Ubuntu Wayland / X11)
 - Phần cứng tối ưu: NVIDIA GeForce RTX (Vulkan Backend) + PipeWire 1.6+ AEC WebRTC
 - Mục đích: Trợ lý ảo AI cục bộ siêu tốc độ (Local Voice AI Assistant), phản hồi
@@ -14,23 +14,31 @@ Thời gian cập nhật: 2026-11-23 19:26:00
   Unified Wake Word Engine (Porcupine 32ms + openWakeWord ONNX có Silero VAD-Gate),
   cơ chế nói liền 1 hơi (One-Breath), Streaming Soft-AGC (thu xa 2-4m), điều hướng đa mô hình
   Ollama LLM có hủy stream TCP (chat_with_cancel), Piper TTS streaming không zombie,
-  và giao diện Dynamic Island QML (Quickshell).
+  giao diện Dynamic Island QML (Quickshell), chế độ nhập liệu trực tiếp (--chat) và chống ngắt câu dài.
 
-- Các nâng cấp đột phá ở bản v3.5.2:
-  1. Loại bỏ hoàn toàn khoảng mù 2.08s sau reset: OpenWakeWordDetector::prefill_silence()
-     nạp sẵn khung phổ tĩnh baseline ngay khi khởi động và sau mỗi lượt reset, giúp AI phản hồi
-     ngay từ khung thứ 0 (0 ms delay).
-  2. Hiệu chỉnh phần cứng ALSA Intel PCH: Khóa cứng Internal Mic Boost = 0 và Capture = 40
-     (+12.75dB), kết hợp wpctl set-volume id 0.20, triệt tiêu hoàn toàn sóng ù cộng hưởng 50-70Hz,
-     đưa nhiễu nền tĩnh RMS từ 0.18 xuống mức chuẩn siêu tĩnh 0.001 - 0.005.
-  3. Cơ chế Cooldown Rollback cho VAD-Gate: Khi tạp âm đột ngột bị VAD chặn, cooldown 1.5s được
-     hủy ngay lập tức, không gây nuốt nhịp khi người dùng cất tiếng gọi từ khóa.
-  4. Nhật ký âm thanh thời gian thực (Live Voice Logging): Log trực tiếp chỉ số VAD, RMS và điểm
-     khớp openWakeWord theo từng giây (journalctl --user -u voice-ai -f), minh bạch hóa 100% việc nhận âm.
-  5. Ưu tiên khởi chạy App máy tính (Native Desktop Apps): Đảo tầng ưu tiên, mở trực tiếp các ứng dụng
-     cục bộ (Spotify, VS Code, Google Chrome, Zalo,...) thay vì mở nhầm link web trình duyệt.
-  6. Khắc phục môi trường D-Bus trong Systemd: Bổ sung DBUS_SESSION_BUS_ADDRESS và XAUTHORITY vào
-     systemd/voice-ai.service, đảm bảo mọi ứng dụng GUI kích hoạt mượt mà trên desktop Wayland/X11.
+- Các nâng cấp đột phá ở bản v3.5.3:
+  1. Khắc phục dứt điểm lỗi UI Overlay không hiện khi khởi động máy:
+     - platform.rs: ensure_overlay_running() nạp môi trường động mới nhất từ "systemctl --user show-environment",
+       tự động quét tệp xác thực .mutter-Xwaylandauth.*, nhận diện GNOME Shell chính xác qua "pgrep -x gnome-shell"
+       và chỉ mở Quickshell khi DISPLAY/Wayland đã sẵn sàng.
+     - systemd/voice-ai.service: Bổ sung PartOf=graphical-session.target.
+  2. Bắt trúng ý định mở ứng dụng kể cả khi nói lịch sự & khởi chạy GUI app chuẩn xác:
+     - normalize.rs: Lọc sạch lời đệm mở đầu (POLITE_PREFIX_RE), lời chen giữa (MID_VERB_POLITE_RE),
+       và hậu tố lịch sự (POLITE_SUFFIX_RE) lặp lại 3 vòng ('nhờ bạn mở giúp tôi ứng dụng spotify nhé' -> 'mở spotify').
+     - apps.rs: Quét thêm trường Name[vi], index tên file stem, mở rộng alias (cài đặt, tệp, máy tính, vlc, discord...),
+       thuật toán so khớp mờ Sorensen-Dice (ngưỡng >= 0.78), cơ chế fallback chạy trực tiếp binary trong PATH.
+     - apps.rs: Tự động inject biến môi trường hiển thị (DISPLAY, WAYLAND_DISPLAY, XAUTHORITY, DBUS_SESSION_BUS_ADDRESS)
+       khi chạy gtk-launch và sh -c nohup <exec>, giúp Spotify và mọi app GUI bật lên ngay lập tức từ daemon.
+     - router.rs: Ưu tiên YouTube Search & Google Search lên trước, chuỗi fallback 3 tầng (Desktop App -> Binary -> Web URL).
+  3. Chế độ gõ văn bản trực tiếp (Text Mode / --chat) & Chế độ im lặng (--silent):
+     - CLI bổ sung cờ --chat kích hoạt ngay giao diện chat trên Dynamic Island và đặt focus bàn phím (focusable: root.isTextMode).
+     - CLI bổ sung cờ --silent khi dùng --query để nhận phản hồi dạng text/card mà không phát âm loa.
+     - Header response card trên Overlay cho phép click vào biểu tượng cây bút để sửa/gõ lệnh tiếp theo.
+  4. Trả lời trọn vẹn câu hỏi dài, không bị cụt lủn:
+     - router.rs: Nâng num_predict lên 512 (Fast), 768 (General), 1024/2048 (Reasoning), 1200 (Coder) và giữ đồng nhất num_ctx = 2048
+       để tránh reload model vào VRAM.
+     - ollama.rs: Cập nhật SYSTEM_PROMPT nhắc nhở trình bày câu chữ hoàn chỉnh khi giải thích hoặc kể chuyện.
+     - VoiceOverlay.qml: Nới lỏng watchdog lên tối đa 300 giây và tăng giới hạn chuỗi đọc lên 8000 ký tự.
 
 
 2. SƠ ĐỒ CÂY CẤU TRÚC FILE (PROJECT DIRECTORY TREE)
@@ -54,20 +62,20 @@ voice-ai/
 │   ├── wakeword/                   # Bộ mô hình openWakeWord ONNX (melspec, embedding, classifier)
 │   └── whisper/                    # Mô hình Whisper STT (ggml-large-v3-turbo-q5_0.bin)
 ├── overlay/
-│   └── VoiceOverlay.qml            # Giao diện Dynamic Island QML chạy trên Quickshell
+│   └── VoiceOverlay.qml            # Giao diện Dynamic Island QML chạy trên Quickshell (Focusable, Text Mode)
 ├── systemd/
-│   └── voice-ai.service            # File cấu hình systemd service chạy nền cùng hệ thống
+│   └── voice-ai.service            # File cấu hình systemd service chạy nền (PartOf=graphical-session.target)
 └── src/                            # TOÀN BỘ MÃ NGUỒN CỐT LÕI (Rust Core)
     ├── lib.rs                      # Thư viện gốc, khai báo & re-export các module
-    ├── config.rs                   # Cấu hình tham số runtime toàn hệ thống
+    ├── config.rs                   # Cấu hình toàn cục, đường dẫn socket, shortcuts URL & alias app
     ├── bin/                        # Các điểm chạy chương trình (Binaries)
     │   ├── ai-assistant/           # Binary chính (CLI daemon & client)
-    │   │   ├── main.rs             # Entry point phân tích tham số lệnh CLI (clap)
+    │   │   ├── main.rs             # Entry point phân tích tham số lệnh CLI (clap: --chat, --silent...)
     │   │   ├── daemon.rs           # Quản lý tiến trình nền, luồng chạy, IPC server & live voice logging
     │   │   ├── pipeline.rs         # Điều phối luồng âm thanh -> One-Breath -> STT -> NLU -> Ollama -> TTS
-    │   │   ├── context.rs          # Quản lý ngữ cảnh runtime & thông số CLI (AppContext)
+    │   │   ├── context.rs          # Quản lý ngữ cảnh runtime & thông số CLI (AppContext, Args)
     │   │   ├── diagnostics.rs      # Tự kiểm tra mic, loa, mô hình AI & Ollama
-    │   │   └── platform.rs         # Khóa cứng gain ALSA tối ưu, chống vỡ tiếng phần cứng & nhận diện Wayland
+    │   │   └── platform.rs         # Khóa cứng gain ALSA, nạp live env từ systemd & khởi chạy Quickshell
     │   └── voice-overlay.rs        # Giao diện overlay phụ trợ bằng GTK4 (tùy chọn với gtk-overlay)
     ├── audio/                      # Tầng thu âm & xử lý tín hiệu số (DSP/AI Audio)
     │   ├── mod.rs                  # Quản lý môi trường ONNX Runtime (ort) dùng chung OnceLock
@@ -78,98 +86,51 @@ voice-ai/
     │   └── wakeword_engine.rs      # UnifiedWakeWordEngine (Porcupine 32ms + openWakeWord có Silero VAD-Gate)
     ├── ai/                         # Tầng trí tuệ nhân tạo (LLM Router & Client)
     │   ├── mod.rs                  # Re-export các struct AI
-    │   ├── ollama.rs               # OllamaClient có chat_with_cancel (hủy stream TCP tức thì)
-    │   └── router.rs               # Điều phối 4 vai trò tác vụ (Fast, General, Reasoning, Coder)
+    │   ├── ollama.rs               # OllamaClient có chat_with_cancel & SYSTEM_PROMPT không cắt cụt câu
+    │   └── router.rs               # Điều phối 4 vai trò tác vụ, tối ưu num_predict (512-2048) & num_ctx (2048)
     ├── core/                       # Tầng lõi nghiệp vụ NLU & Trạng thái
     │   ├── mod.rs                  # Re-export module core
-    │   ├── state.rs                # StateManager (FSM Quản lý trạng thái: Idle, Listening, Thinking, Speaking)
+    │   ├── state.rs                # StateManager (FSM Quản lý trạng thái, trigger_chat & ghi UI state nguyên tử)
     │   ├── memory.rs               # ConversationHistory (Cửa sổ trượt ghi nhớ ngữ cảnh hội thoại)
     │   └── nlu/                    # Bộ phân tích ngôn ngữ tự nhiên cực nhanh (Fast-Path NLU)
     │       ├── mod.rs              # Entry point NLU
     │       ├── fuzzy.rs            # Thuật toán so khớp mờ Jaro-Winkler cho từ khóa & app
-    │       ├── normalize.rs        # Chuẩn hóa tiếng Việt, khử dấu, khử lời mở đầu/kết thúc lịch sự
+    │       ├── normalize.rs        # Chuẩn hóa tiếng Việt, lọc 3 vòng lời mở đầu/kết thúc/chen giữa lịch sự
     │       ├── patterns.rs         # Hệ thống Regex biên dịch tĩnh (LazyLock)
-    │       └── router.rs           # Bộ định tuyến 15 nhóm lệnh cục bộ (Ưu tiên App > Web > System)
+    │       └── router.rs           # Bộ định tuyến 15 nhóm lệnh (YouTube/Google -> App -> Binary -> Web)
     ├── ipc/                        # Giao tiếp liên tiến trình qua UNIX Domain Socket
-    │   ├── mod.rs                  # Định nghĩa định dạng gói tin IPC (IpcRequest / IpcResponse)
-    │   ├── client.rs               # IPC Client gửi lệnh nhanh (--status, --trigger, --stop, --query)
-    │   └── server.rs               # IPC Server bất đồng bộ lắng nghe tại /tmp/voice_ai_state.sock
+    │   ├── mod.rs                  # Định nghĩa định dạng gói tin IPC
+    │   ├── client.rs               # IPC Client gửi lệnh nhanh (--status, --trigger, --stop, --query, --chat)
+    │   └── server.rs               # IPC Server xử lý ActionRequest::Query, ActionRequest::Chat...
     ├── speech/                     # Tầng tổng hợp giọng nói & âm thanh thông báo
     │   ├── mod.rs                  # Re-export module speech
     │   ├── chime.rs                # Phát âm thông báo (Ting / Chime Wake) cực nhanh qua rodio/pw-play
-    │   ├── sanitize.rs             # SentenceStreamSplitter ngắt câu thông minh, khử thẻ <think>
     │   └── tts.rs                  # PiperTts streaming trực tiếp không sinh tiến trình zombie
     └── tools/                      # Bộ công cụ thực thi hệ thống (Native System Tools)
         ├── mod.rs                  # Re-export tools
-        ├── apps.rs                 # Quét .desktop, fuzzy match & khởi chạy ứng dụng GUI với fallback
+        ├── apps.rs                 # Quét .desktop, Name[vi], stem, Sorensen-Dice >= 0.78, fallback binary & inject env
         ├── dev.rs                  # Công cụ nhà phát triển: Git status, Docker containers, Java version, Kill port
         ├── system.rs               # Điều khiển âm lượng, độ sáng, pin, RAM, CPU, power mode, Hyprland
         ├── timer.rs                # Quản lý bộ đếm ngược hẹn giờ (TimerManager)
         └── web.rs                  # Mở trình duyệt, tìm kiếm YouTube, Google Search, tra thời tiết wttr.in
 
 
-3. CHI TIẾT 43 TỆP MÃ NGUỒN ĐÓNG GÓI
---------------------------------------------------------------------------------
-STT  Đường dẫn file                         Mô tả chi tiết chức năng
----  -------------------------------------  -------------------------------------------------------------
- 1   Cargo.toml                             Cấu hình crate, tính năng (features), dependencies Rust
- 2   systemd/voice-ai.service               File cấu hình systemd quản lý daemon chạy nền tự khởi động
- 3   overlay/VoiceOverlay.qml               Giao diện Dynamic Island QML hiệu ứng động trên Quickshell
- 4   src/config.rs                          Cấu hình toàn cục, đường dẫn socket, shortcuts URL & alias app
- 5   src/lib.rs                             Khai báo root crate, export các module công khai
- 6   src/ai/mod.rs                          Re-export các module AI (ollama, router)
- 7   src/ai/ollama.rs                       Client gọi Ollama API, streaming token, kiểm tra ngắt 30ms
- 8   src/ai/router.rs                       Định tuyến vai trò mô hình (Fast, General, Reasoning, Coder)
- 9   src/audio/capture.rs                   Thu âm cpal, Biquad HPF 100Hz, resampler, Soft-AGC thu xa
-10   src/audio/mod.rs                       Khởi tạo môi trường ONNX Runtime (ort) dùng chung
-11   src/audio/oww.rs                       openWakeWord 3 tầng ONNX, prefill silence, TriggerGate nhạy
-12   src/audio/stt.rs                       Whisper STT native Vulkan GPU, transcribe_samples tối ưu
-13   src/audio/vad.rs                       Silero VAD v5 ONNX chấm điểm giọng người, SchmittTriggerVad
-14   src/audio/wakeword.rs                  Enum WakeWordType, hàm nhận diện từ khóa văn bản
-15   src/audio/wakeword_engine.rs           UnifiedWakeWordEngine kết hợp Porcupine và openWakeWord + VAD
-16   src/bin/voice-overlay.rs               Giao diện GTK4 overlay phụ trợ (khi bật feature gtk-overlay)
-17   src/bin/ai-assistant/context.rs        Struct AppContext và Args phân tích tham số CLI
-18   src/bin/ai-assistant/daemon.rs         Vòng lặp nền nghe mic, phát hiện từ khóa, log thời gian thực
-19   src/bin/ai-assistant/diagnostics.rs    Chế độ kiểm tra âm thanh trực tiếp (--debug-audio) và benchmark
-20   src/bin/ai-assistant/main.rs           Hàm main() xử lý lệnh CLI và khởi động daemon
-21   src/bin/ai-assistant/pipeline.rs       Luồng xử lý câu lệnh: Chime -> Thu âm -> Whisper -> NLU -> TTS
-22   src/bin/ai-assistant/platform.rs       Cân bằng gain ALSA phần cứng (Boost=0, Capture=40), nhận diện DE
-23   src/core/memory.rs                     Quản lý lịch sử hội thoại 10 lượt gần nhất theo cửa sổ trượt
-24   src/core/mod.rs                        Re-export các module nghiệp vụ lõi
-25   src/core/state.rs                      Quản lý trạng thái trợ lý (Idle, Listening, Thinking, Speaking)
-26   src/core/nlu/fuzzy.rs                  Thuật toán so khớp mờ Jaro-Winkler nhận diện ý định lệnh
-27   src/core/nlu/mod.rs                    Entry point phân tích ngôn ngữ tự nhiên
-28   src/core/nlu/normalize.rs              Khử dấu, loại bỏ lời mở đầu/kết thúc lịch sự tiếng Việt
-29   src/core/nlu/patterns.rs               Tập hợp Regex biên dịch tĩnh (LazyLock) cho các nhóm lệnh
-30   src/core/nlu/router.rs                 Bộ định tuyến 15 nhóm lệnh Fast-Path (Ưu tiên App > Web)
-31   src/ipc/client.rs                      Hàm gửi lệnh qua UNIX Domain Socket tới daemon nền
-32   src/ipc/mod.rs                         Định dạng gói tin IPC giao tiếp
-33   src/ipc/server.rs                      Server bất đồng bộ xử lý yêu cầu điều khiển từ client
-34   src/speech/chime.rs                    Phát âm báo thức tỉnh (Chime Wake) cực nhanh
-35   src/speech/mod.rs                      Re-export module speech
-36   src/speech/sanitize.rs                 Làm sạch văn bản cho TTS, loại bỏ Markdown, ngắt câu chuẩn
-37   src/speech/tts.rs                      Tổng hợp giọng nói Piper TTS tiếng Việt, streaming thời gian thực
-38   src/tools/apps.rs                      Quét kho ứng dụng .desktop, match app và khởi chạy tiến trình
-39   src/tools/dev.rs                       Lệnh dev: kiểm tra Git, Docker, Java, giải phóng port
-40   src/tools/mod.rs                       Re-export các công cụ hệ thống
-41   src/tools/system.rs                    Điều khiển âm lượng, độ sáng, pin, phần cứng, chế độ quạt
-42   src/tools/timer.rs                     Quản lý bộ hẹn giờ bất đồng bộ
-43   src/tools/web.rs                       Mở trình duyệt, tìm kiếm YouTube/Google, tra cứu thời tiết
-
-
-4. HƯỚNG DẪN KIỂM THỬ VÀ VẬN HÀNH
+3. HƯỚNG DẪN KIỂM THỬ VÀ VẬN HÀNH
 --------------------------------------------------------------------------------
 1. Kiểm tra trạng thái dịch vụ nền:
    $ ai-assistant-rs --status
 
-2. Theo dõi nhật ký nhận diện âm thanh & từ khóa thời gian thực:
-   $ journalctl --user -u voice-ai -f
+2. Mở trực tiếp chế độ chat văn bản trên Overlay:
+   $ ai-assistant-rs --chat
 
-3. Gọi thử nghiệm trực tiếp qua CLI:
-   $ ai-assistant-rs --query "Mở Spotify"
-   $ ai-assistant-rs --query "Mở Google Chrome"
-   $ ai-assistant-rs --query "Bây giờ là mấy giờ"
+3. Thử nghiệm câu lệnh mở ứng dụng lịch sự:
+   $ ai-assistant-rs --query "nhờ bạn mở giúp tôi ứng dụng spotify nhé" --silent
+   $ ai-assistant-rs --query "bạn có thể mở cài đặt được không" --silent
+   $ ai-assistant-rs --query "mở giúp mình quản lý tệp đi" --silent
 
-4. Chạy toàn bộ 26 bài kiểm thử tự động:
+4. Thử nghiệm câu hỏi dài với LLM:
+   $ ai-assistant-rs --query "Kể một câu chuyện ngắn khoảng 6 câu về một chú robot học cách thưởng thức cà phê" --silent
+
+5. Chạy toàn bộ 26 bài kiểm thử tự động:
    $ cargo test
 ================================================================================

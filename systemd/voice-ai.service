@@ -2,6 +2,7 @@
 Description=Voice AI Assistant Daemon (Rust Native)
 Documentation=https://github.com/TuNgocCoder-zako/voiceAI_Rust
 After=graphical-session.target pipewire.service pipewire-pulse.service
+PartOf=graphical-session.target
 Wants=pipewire.service
 
 [Service]

@@ -12,6 +12,8 @@ pub struct DesktopApp {
     pub exec: String,
     pub icon: String,
     pub desktop_file: PathBuf,
+    #[serde(default)]
+    pub name_vi: Option<String>,
 }
 
 pub type AppIndex = HashMap<String, DesktopApp>;
@@ -39,7 +41,16 @@ pub fn build_app_index() -> AppIndex {
             if path.extension().and_then(|ext| ext.to_str()) == Some("desktop") {
                 if let Some(app) = parse_desktop_file(path) {
                     let key = app.name.to_lowercase();
-                    index.entry(key).or_insert(app);
+                    index.entry(key).or_insert_with(|| app.clone());
+
+                    if let Some(ref vi) = app.name_vi {
+                        index.entry(vi.to_lowercase()).or_insert_with(|| app.clone());
+                    }
+
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        let stem_key = stem.to_lowercase();
+                        index.entry(stem_key).or_insert_with(|| app.clone());
+                    }
                 }
             }
         }
@@ -52,6 +63,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
     let content = fs::read_to_string(path).ok()?;
     let mut in_desktop_entry = false;
     let mut name = None;
+    let mut name_vi = None;
     let mut exec = None;
     let mut icon = String::new();
     let mut no_display = false;
@@ -71,6 +83,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
                 let v = v.trim();
                 match k {
                     "Name" if name.is_none() => name = Some(v.to_string()),
+                    "Name[vi]" => name_vi = Some(v.to_string()),
                     "Exec" if exec.is_none() => {
                         let clean_exec = v
                             .split_whitespace()
@@ -96,6 +109,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
         exec: exec?,
         icon,
         desktop_file: path.to_path_buf(),
+        name_vi,
     })
 }
 
@@ -105,20 +119,33 @@ pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp>
         return None;
     }
 
-    // Exact name match
+    // 1. Khớp chính xác theo key index (bao gồm name, name[vi], stem)
     if let Some(app) = index.get(&q) {
         return Some(app);
     }
 
-    // Common aliases
+    // 2. Mở rộng aliases phổ biến trên Linux & Việt hóa
     let alias_target = match q.as_str() {
         "vs code" | "vscode" | "visual studio code" | "code" => "visual studio code",
-        "terminal" | "terminal emulator" | "bàn điều khiển" => "terminal",
+        "terminal" | "terminal emulator" | "bàn điều khiển" | "dòng lệnh" | "bash" => "terminal",
         "chrome" | "google chrome" => "google chrome",
         "firefox" | "cáo lửa" => "firefox",
         "zalo" => "zalo",
-        "spotify" => "spotify",
+        "spotify" | "spotfy" => "spotify",
         "telegram" => "telegram",
+        "cài đặt" | "cấu hình" | "setting" | "settings" | "thiết lập" => "gnome-control-center",
+        "quản lý tệp" | "quản lý file" | "tệp" | "tập tin" | "file" | "files" | "thư mục" | "nautilus" => "nautilus",
+        "máy tính" | "máy tính bỏ túi" | "calculator" | "calc" => "calculator",
+        "soạn thảo" | "ghi chú" | "text editor" | "gedit" => "text editor",
+        "discord" => "discord",
+        "vlc" | "xem phim" => "vlc",
+        "obs" | "obs studio" => "obs",
+        "postman" => "postman",
+        "intellij" | "idea" => "intellij",
+        "android studio" => "android studio",
+        "obsidian" => "obsidian",
+        "steam" => "steam",
+        "brave" => "brave",
         _ => &q,
     };
 
@@ -126,11 +153,30 @@ pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp>
         return Some(app);
     }
 
-    // Prefix / Substring match
+    // 3. Khớp tiền tố hoặc chứa chuỗi (contains)
     for (name, app) in index.iter() {
-        if name.contains(&q) || name.contains(alias_target) {
+        if name == alias_target || name.contains(&q) || name.contains(alias_target) {
             return Some(app);
         }
+    }
+
+    // 4. Mờ nâng cao với Sorensen-Dice similarity (>= 0.78)
+    let mut best_match: Option<(&DesktopApp, f64)> = None;
+    for (name, app) in index.iter() {
+        let sim = strsim::sorensen_dice(&q, name);
+        if sim >= 0.78 {
+            if let Some((_, best_sim)) = best_match {
+                if sim > best_sim {
+                    best_match = Some((app, sim));
+                }
+            } else {
+                best_match = Some((app, sim));
+            }
+        }
+    }
+
+    if let Some((app, _)) = best_match {
+        return Some(app);
     }
 
     None
@@ -146,15 +192,82 @@ pub fn find_app_in_text<'a>(text: &str, index: &'a AppIndex) -> Option<&'a Deskt
     None
 }
 
+fn inject_live_env(cmd: &mut Command) {
+    if let Ok(out) = Command::new("systemctl")
+        .args(["--user", "show-environment"])
+        .output()
+    {
+        if out.status.success() {
+            let out_str = String::from_utf8_lossy(&out.stdout);
+            for line in out_str.lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    if matches!(
+                        k,
+                        "DISPLAY"
+                            | "WAYLAND_DISPLAY"
+                            | "XAUTHORITY"
+                            | "DBUS_SESSION_BUS_ADDRESS"
+                            | "XDG_RUNTIME_DIR"
+                            | "XDG_CURRENT_DESKTOP"
+                    ) {
+                        cmd.env(k, v);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn try_launch_known_binary(target: &str) -> Option<String> {
+    let t = target.trim().to_lowercase();
+    let bin_name = match t.as_str() {
+        "spotify" | "spotfy" => "spotify",
+        "chrome" | "google chrome" => "google-chrome",
+        "firefox" => "firefox",
+        "code" | "vscode" | "vs code" => "code",
+        "cài đặt" | "settings" | "gnome-control-center" => "gnome-control-center",
+        "quản lý tệp" | "tệp" | "files" | "nautilus" => "nautilus",
+        "terminal" | "gnome-terminal" => "gnome-terminal",
+        "calculator" | "máy tính" => "gnome-calculator",
+        "text editor" | "gedit" => "gedit",
+        "discord" => "discord",
+        "vlc" => "vlc",
+        "obs" => "obs",
+        "postman" => "postman",
+        "steam" => "steam",
+        "brave" => "brave-browser",
+        _ => return None,
+    };
+
+    let check = Command::new("which").arg(bin_name).output().ok()?;
+    if !check.status.success() {
+        return None;
+    }
+
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(format!("nohup {} >/dev/null 2>&1 &", bin_name))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    inject_live_env(&mut cmd);
+
+    if cmd.spawn().is_ok() {
+        Some(bin_name.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn launch_desktop_app(app: &DesktopApp) -> bool {
     // 1. Thử khởi chạy chuẩn Desktop thông qua gtk-launch
     if let Some(fname) = app.desktop_file.file_name() {
-        if let Ok(mut child) = Command::new("gtk-launch")
-            .arg(fname)
+        let mut cmd = Command::new("gtk-launch");
+        cmd.arg(fname)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+            .stderr(Stdio::null());
+        inject_live_env(&mut cmd);
+
+        if let Ok(mut child) = cmd.spawn() {
             std::thread::sleep(std::time::Duration::from_millis(60));
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => return true,
@@ -165,13 +278,13 @@ pub fn launch_desktop_app(app: &DesktopApp) -> bool {
     }
 
     // 2. Fallback: Chạy trực tiếp binary từ trường Exec trong .desktop file
-    Command::new("sh")
-        .arg("-c")
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(format!("nohup {} >/dev/null 2>&1 &", app.exec))
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+        .stderr(Stdio::null());
+    inject_live_env(&mut cmd);
+    cmd.spawn().is_ok()
 }
 
 /// Helper chạy ydotool (cần ydotoold) hoặc xdotool (trên X11)

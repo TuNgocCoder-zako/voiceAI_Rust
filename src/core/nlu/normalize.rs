@@ -192,10 +192,6 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         (r"(?i)\b(?:quý\s*vị\s*hẹn\s*giờ)\b", "hủy hẹn giờ"),
         (r"(?i)\b(?:uốc\s*(?:xây|bay|sờ\s*bây)|quốc\s*(?:xây|bay|sờ\s*bây))\b", "workspace"),
         (r"(?i)\b(?:híp\s*(?:len|lần|lan|lơn)|hai\s*pơ\s*(?:len|lan))\b", "hyprland"),
-        // Gọt từ mở đầu lịch sự
-        (r"(?i)^(?:hãy|làm\s+ơn|cho\s+(?:tôi|mình|anh|em)|giúp\s+(?:tôi|mình))\s+", ""),
-        // Gọt hậu tố lịch sự/khẩu ngữ ở cuối câu
-        (r"(?i)\s+(?:giúp\s+(?:tôi|mình|nhé|nha)|hộ\s+(?:tôi|mình|cái)|cho\s+(?:tôi|mình)|lên\s+đi|lên\s+nhé|lên|đi|nhé|nha|với|ạ)$", ""),
     ];
 
     rules
@@ -207,12 +203,25 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         .collect()
 });
 
+pub static POLITE_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:hãy|làm\s+ơn|vui\s+lòng|xin\s+vui\s+lòng|nhờ\s+(?:bạn|em|trợ\s+lý|máy)|phiền\s+(?:bạn|em)|bạn\s+(?:có\s+thể|hãy)|cho\s+(?:tôi|mình|anh|em)|giúp\s+(?:tôi|mình))\s+").unwrap()
+});
+
+pub static MID_VERB_POLITE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(mở|bật|chạy|vào|khởi\s+động|tắt|đóng|thoát|dừng|tạm\s+dừng|chuyển|tăng|giảm)\s+(?:giúp|hộ|giùm|cho)\s+(?:tôi|mình|em|anh|chị|tao)\s+").unwrap()
+});
+
+pub static POLITE_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\s+(?:giúp\s+(?:tôi|mình|nhé|nha)|hộ\s+(?:tôi|mình|cái)|cho\s+(?:tôi|mình|em)|lên\s+đi|lên\s+nhé|lên|đi\s+nhé|đi|nhé|nha|với\s+nhé|với|ạ|được\s+không|được\s+chứ)$").unwrap()
+});
+
 pub static MULTI_SPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 /// Làm sạch và chuẩn hóa văn bản đầu vào:
 /// - Chuẩn hóa NFKC
 /// - Tự động khôi phục dấu tiếng Việt từ unaccented map
 /// - Lọc nhiễu âm Whisper
+/// - Loại bỏ từ đệm, tiền tố, hậu tố và lời chen lịch sự tiếng Việt
 pub fn clean_user_input(text: &str) -> String {
     if text.is_empty() {
         return String::new();
@@ -231,6 +240,23 @@ pub fn clean_user_input(text: &str) -> String {
     for rule in PHONETIC_CLEANUP_RULES.iter() {
         if rule.pattern.is_match(&t) {
             t = rule.pattern.replace_all(&t, rule.replacement).to_string();
+        }
+    }
+
+    // Làm sạch tiền tố, hậu tố và lời chen lịch sự lặp lại tối đa 3 vòng
+    for _ in 0..3 {
+        let prev = t.clone();
+        if POLITE_PREFIX_RE.is_match(&t) {
+            t = POLITE_PREFIX_RE.replace(&t, "").to_string();
+        }
+        if MID_VERB_POLITE_RE.is_match(&t) {
+            t = MID_VERB_POLITE_RE.replace_all(&t, "$1 ").to_string();
+        }
+        if POLITE_SUFFIX_RE.is_match(&t) {
+            t = POLITE_SUFFIX_RE.replace(&t, "").to_string();
+        }
+        if t == prev {
+            break;
         }
     }
 
@@ -261,5 +287,17 @@ mod tests {
         assert_eq!(clean_user_input("dong cua so"), "đóng cửa sổ");
         assert_eq!(clean_user_input("m ở visual studio code"), "mở visual studio code");
         assert_eq!(clean_user_input("Má giữ tập"), "mở youtube");
+        assert_eq!(
+            clean_user_input("nhờ bạn mở giúp tôi ứng dụng spotify nhé"),
+            "mở ứng dụng spotify"
+        );
+        assert_eq!(
+            clean_user_input("bạn có thể mở cài đặt được không"),
+            "mở cài đặt"
+        );
+        assert_eq!(
+            clean_user_input("mở giúp mình quản lý tệp đi"),
+            "mở quản lý tệp"
+        );
     }
 }

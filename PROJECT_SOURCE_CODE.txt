@@ -1,10 +1,19 @@
 ================================================================================
-         BẢN ĐÓNG GÓI MÃ NGUỒN TOÀN DIỆN DỰ ÁN VOICE AI (v3.5.2)
+          BẢN ĐÓNG GÓI MÃ NGUỒN TOÀN DIỆN DỰ ÁN VOICE AI (v3.5.3)
 ================================================================================
-Thời gian đóng gói : 2026-11-23 19:25:50
+Thời gian đóng gói : 2026-11-23 19:56:47
 Tổng số tập tin    : 43 files (Cấu hình, Service, QML & Rust Core)
-Trạng thái kiểm thử: 26/26 Unit Tests PASS, 0 Warning
+Trạng thái kiểm thử: 26/26 Unit Tests PASS, 0 Error, 0 Warning
 Kho lưu trữ Git    : https://github.com/TuNgocCoder-zako/voiceAI_Rust.git
+Các bản vá cốt lõi :
+  1. Mở Overlay khi boot: Đọc động DISPLAY, WAYLAND_DISPLAY, XAUTHORITY từ systemd show-environment,
+     tự dò tệp .mutter-Xwaylandauth.* và bổ sung PartOf=graphical-session.target.
+  2. App Launcher & NLU: Khử triệt để lời mở/kết lịch sự tiếng Việt (3 vòng), index Name[vi] & stem,
+     bổ sung Sorensen-Dice match >= 0.78, fallback binary PATH, truyền môi trường đồ họa khi launch app.
+  3. Chế độ gõ trực tiếp (Text Mode / --chat): Hỗ trợ cờ --chat qua IPC, focusable trên Overlay,
+     bổ sung cờ --silent không phát âm TTS khi truy vấn.
+  4. Câu trả lời dài không bị ngắt quãng: Nâng num_predict lên 512-2048, thống nhất num_ctx 2048,
+     tối ưu SYSTEM_PROMPT cho câu trả lời hoàn chỉnh, mở rộng watchdog Overlay 300s và giới hạn đọc 8000 ký tự.
 ================================================================================
 
 ================================================================================
@@ -64,14 +73,14 @@ pv_porcupine = { version = "=3.0.3", optional = true }
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 
-
 ================================================================================
-[02/43] TỆP: systemd/voice-ai.service (25 dòng, 961 bytes)
+[02/43] TỆP: systemd/voice-ai.service (26 dòng, 993 bytes)
 ================================================================================
 [Unit]
 Description=Voice AI Assistant Daemon (Rust Native)
 Documentation=https://github.com/TuNgocCoder-zako/voiceAI_Rust
 After=graphical-session.target pipewire.service pipewire-pulse.service
+PartOf=graphical-session.target
 Wants=pipewire.service
 
 [Service]
@@ -94,9 +103,8 @@ StandardError=journal
 [Install]
 WantedBy=graphical-session.target
 
-
 ================================================================================
-[03/43] TỆP: overlay/VoiceOverlay.qml (1342 dòng, 63,346 bytes)
+[03/43] TỆP: overlay/VoiceOverlay.qml (1364 dòng, 64,363 bytes)
 ================================================================================
 import QtQuick
 import QtQuick.Layouts
@@ -160,15 +168,23 @@ ShellRoot {
             let st = data.status || "idle";
 
             // Watchdog: Nếu status là "speaking" hoặc "thinking" nhưng không có cập nhật mới
-            // trong khoảng thời gian hợp lý (tiến trình python dừng đột ngột, crash, hoặc test hoàn tất)
+            // trong khoảng thời gian hợp lý (tiến trình dừng đột ngột, crash, hoặc test hoàn tất)
             let updated = data.updated_at || 0;
             let nowSec = Date.now() / 1000.0;
-            if (updated > 0 && st !== "idle") {
+            if (updated > 0 && st !== "idle" && st !== "chat") {
                 let textLen = (data.text || "").length;
-                let maxDuration = (st === "thinking") ? 90.0 : Math.max(8.0, Math.min(60.0, textLen / 10.0 + 5.0));
+                let maxDuration = (st === "thinking") ? 90.0 : Math.max(20.0, Math.min(300.0, textLen / 8.0 + 15.0));
                 if (nowSec - updated > maxDuration) {
                     st = "idle";
                 }
+            }
+
+            if (st === "chat") {
+                root.isVisible = true;
+                root.isTextMode = true;
+                root.userIsTyping = true;
+                autoCollapseTimer.stop();
+                hideTimer.stop();
             }
 
             let prevStatus = root.currentStatus;
@@ -350,7 +366,7 @@ ShellRoot {
             cmdRunner.running = true;
             showToast("🔇 Đã dừng đọc");
         } else {
-            let toSpeak = root.longAnswerText.substring(0, 1200);
+            let toSpeak = root.longAnswerText.substring(0, 8000);
             cmdRunner.commandList = [root.assistantBin, "--speak", toSpeak];
             cmdRunner.running = true;
             showToast("🔊 Đang đọc phản hồi...");
@@ -402,6 +418,8 @@ ShellRoot {
         screen: Quickshell.screens[0]
         visible: root.isVisible || mainContent.opacity > 0.01
         exclusionMode: ExclusionMode.Ignore
+        focusable: root.isTextMode
+        WlrLayershell.keyboardFocus: root.isTextMode ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
         anchors {
             bottom: true
@@ -520,6 +538,18 @@ ShellRoot {
                                 Layout.fillWidth: true
                                 Layout.alignment: Qt.AlignVCenter
                                 spacing: 6
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        root.isTextMode = true;
+                                        if (root.queryText.length > 0) {
+                                            textInput.text = root.queryText;
+                                        }
+                                        textInput.forceActiveFocus();
+                                    }
+                                }
 
                                 Text {
                                     text: "✎"
@@ -1441,122 +1471,8 @@ ShellRoot {
     }
 }
 
-
 ================================================================================
-[04/43] TỆP: src/config.rs (87 dòng, 4,023 bytes)
-================================================================================
-use std::collections::HashMap;
-use std::path::PathBuf;
-
-pub const DEFAULT_SOCKET_PATH: &str = "/tmp/voice_ai_state.sock";
-pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
-pub const DEFAULT_MODEL: &str = "qwen3.8:2b";
-pub const SAMPLE_RATE: u32 = 16000;
-pub const CHUNK_SIZE: usize = 1280;
-
-#[derive(Debug, Clone)]
-pub struct Config {
-    pub socket_path: PathBuf,
-    pub ollama_url: String,
-    pub model: String,
-    pub sample_rate: u32,
-    pub chunk_size: usize,
-    pub url_shortcuts: HashMap<String, String>,
-    pub url_display_names: HashMap<String, String>,
-    pub app_aliases: HashMap<String, String>,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        let socket_path = std::env::var("VOICE_AI_SOCKET")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOCKET_PATH));
-
-        let ollama_url = std::env::var("OLLAMA_HOST")
-            .unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string())
-            .trim_end_matches('/')
-            .to_string();
-
-        let model = std::env::var("AI_ASSISTANT_LLM_MODEL")
-            .unwrap_or_else(|_| DEFAULT_MODEL.to_string());
-
-        let mut url_shortcuts = HashMap::new();
-        url_shortcuts.insert("youtube".into(), "https://www.youtube.com".into());
-        url_shortcuts.insert("gmail".into(), "https://mail.google.com".into());
-        url_shortcuts.insert("facebook".into(), "https://www.facebook.com".into());
-        url_shortcuts.insert("github".into(), "https://github.com".into());
-        url_shortcuts.insert("zalo".into(), "https://chat.zalo.me".into());
-        url_shortcuts.insert("spotify".into(), "https://open.spotify.com".into());
-        url_shortcuts.insert("google".into(), "https://www.google.com".into());
-        url_shortcuts.insert("chrome".into(), "https://www.google.com".into());
-        url_shortcuts.insert("google chrome".into(), "https://www.google.com".into());
-        url_shortcuts.insert("chatgpt".into(), "https://chatgpt.com".into());
-        url_shortcuts.insert("claude".into(), "https://claude.ai".into());
-        url_shortcuts.insert("gemini".into(), "https://gemini.google.com".into());
-
-        let mut url_display_names = HashMap::new();
-        url_display_names.insert("youtube".into(), "YouTube".into());
-        url_display_names.insert("gmail".into(), "Gmail".into());
-        url_display_names.insert("facebook".into(), "Facebook".into());
-        url_display_names.insert("github".into(), "GitHub".into());
-        url_display_names.insert("zalo".into(), "Zalo".into());
-        url_display_names.insert("spotify".into(), "Spotify".into());
-        url_display_names.insert("google".into(), "Google".into());
-        url_display_names.insert("chrome".into(), "Google Chrome".into());
-        url_display_names.insert("google chrome".into(), "Google Chrome".into());
-
-        let mut app_aliases = HashMap::new();
-        app_aliases.insert("vs code".into(), "code".into());
-        app_aliases.insert("vscode".into(), "code".into());
-        app_aliases.insert("visual studio code".into(), "code".into());
-        app_aliases.insert("terminal".into(), "terminal".into());
-        app_aliases.insert("terminal emulator".into(), "terminal".into());
-        app_aliases.insert("trình duyệt".into(), "browser".into(),);
-        app_aliases.insert("firefox".into(), "firefox".into());
-        app_aliases.insert("chrome".into(), "google-chrome".into());
-        app_aliases.insert("google chrome".into(), "google-chrome".into());
-        app_aliases.insert("brave".into(), "brave-browser".into());
-        app_aliases.insert("spotify".into(), "spotify".into());
-        app_aliases.insert("zalo".into(), "zalo".into());
-        app_aliases.insert("telegram".into(), "telegram".into());
-
-        Self {
-            socket_path,
-            ollama_url,
-            model,
-            sample_rate: SAMPLE_RATE,
-            chunk_size: CHUNK_SIZE,
-            url_shortcuts,
-            url_display_names,
-            app_aliases,
-        }
-    }
-}
-
-
-================================================================================
-[05/43] TỆP: src/lib.rs (16 dòng, 498 bytes)
-================================================================================
-pub mod config;
-pub mod core;
-pub mod ipc;
-pub mod tools;
-pub mod ai;
-pub mod speech;
-pub mod audio;
-
-pub use audio::{detect_wake_word, AudioRecorder, WakeWordType, WhisperEngine};
-pub use config::Config;
-pub use core::nlu::{clean_user_input, fast_path_nlu, strip_vietnamese_accents};
-pub use core::state::{AssistantState, StateManager};
-pub use ipc::client::send_ipc_command;
-pub use ipc::server::IpcServer;
-pub use speech::{play_chime, ChimeType, PiperTts};
-pub use tools::apps::build_app_index;
-
-
-================================================================================
-[06/43] TỆP: src/ai/mod.rs (5 dòng, 185 bytes)
+[04/43] TỆP: src/ai/mod.rs (5 dòng, 185 bytes)
 ================================================================================
 pub mod ollama;
 pub mod router;
@@ -1564,9 +1480,8 @@ pub mod router;
 pub use ollama::{ChatMessage, OllamaClient};
 pub use router::{filter_thinking_content, ChatOptions, ModelDetails, ModelRouter, ModelTagInfo, TaskRole};
 
-
 ================================================================================
-[07/43] TỆP: src/ai/ollama.rs (215 dòng, 6,983 bytes)
+[05/43] TỆP: src/ai/ollama.rs (215 dòng, 7,069 bytes)
 ================================================================================
 use crate::ai::router::ChatOptions;
 use futures_util::StreamExt;
@@ -1577,8 +1492,8 @@ use std::time::Duration;
 pub const SYSTEM_PROMPT: &str = "\
 Bạn là Alexa, một trợ lý ảo hệ điều hành AI thông minh, nhanh nhẹn và hữu ích trên máy tính Linux.\n\
 Nguyên tắc trả lời:\n\
-- Luôn trả lời bằng tiếng Việt tự nhiên, ngắn gọn, súc tích (1 đến 3 câu).\n\
-- Vì câu trả lời sẽ được đọc thành tiếng qua giọng nói (TTS), KHÔNG sử dụng ký tự đặc biệt, định dạng markdown phức tạp, bảng biểu hay danh sách dài dòng.\n\
+- Luôn trả lời bằng tiếng Việt tự nhiên, gãy gọn và đủ ý. Khi được yêu cầu giải thích, hướng dẫn hoặc kể chuyện, hãy trình bày câu chữ hoàn chỉnh, không bỏ dở giữa chừng.\n\
+- Vì câu trả lời có thể được đọc qua giọng nói (TTS), hạn chế dùng bảng biểu phức tạp hay ký tự đặc biệt khó đọc.\n\
 - Thân thiện, nhiệt tình và chính xác.\
 ";
 
@@ -1784,9 +1699,8 @@ impl OllamaClient {
     }
 }
 
-
 ================================================================================
-[08/43] TỆP: src/ai/router.rs (374 dòng, 14,358 bytes)
+[06/43] TỆP: src/ai/router.rs (374 dòng, 14,365 bytes)
 ================================================================================
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -2087,25 +2001,25 @@ impl ModelRouter {
         match role {
             TaskRole::Reasoning => ChatOptions {
                 temperature: Some(0.6),
-                num_predict: Some(if is_thinking { 1200 } else { 450 }),
+                num_predict: Some(if is_thinking { 2048 } else { 1024 }),
                 num_ctx: Some(2048),
                 top_p: Some(0.95),
             },
             TaskRole::Coder => ChatOptions {
                 temperature: Some(0.2), // Nhiệt độ thấp cho kết quả chính xác, chuẩn cú pháp
-                num_predict: Some(800),
+                num_predict: Some(1200),
                 num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
             TaskRole::Fast => ChatOptions {
                 temperature: Some(0.3),
-                num_predict: Some(120), // Ngắn gọn để đọc TTS tự nhiên trong vài giây
+                num_predict: Some(512), // Đủ dài cho câu trả lời tự nhiên và đầy đủ ý
                 num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
             TaskRole::General => ChatOptions {
                 temperature: Some(0.4),
-                num_predict: Some(200),
+                num_predict: Some(768),
                 num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
@@ -2163,9 +2077,8 @@ mod tests {
     }
 }
 
-
 ================================================================================
-[09/43] TỆP: src/audio/capture.rs (854 dòng, 30,454 bytes)
+[07/43] TỆP: src/audio/capture.rs (854 dòng, 30,454 bytes)
 ================================================================================
 use crate::audio::vad::{HighPassFilter, SchmittTriggerVad, SileroVad};
 use crate::core::state::StateManager;
@@ -3022,9 +2935,8 @@ mod tests {
     }
 }
 
-
 ================================================================================
-[10/43] TỆP: src/audio/mod.rs (33 dòng, 1,021 bytes)
+[08/43] TỆP: src/audio/mod.rs (33 dòng, 1,021 bytes)
 ================================================================================
 pub mod capture;
 pub mod oww;
@@ -3060,9 +2972,8 @@ pub use vad::{SchmittTriggerVad, SileroVad};
 pub use wakeword::{detect_wake_word, WakeWordType};
 pub use wakeword_engine::{UnifiedWakeWordEngine, WakeFrameStatus, WakeHit};
 
-
 ================================================================================
-[11/43] TỆP: src/audio/oww.rs (510 dòng, 17,842 bytes)
+[09/43] TỆP: src/audio/oww.rs (510 dòng, 17,842 bytes)
 ================================================================================
 use crate::audio::wakeword::WakeWordType;
 use ort::session::{builder::GraphOptimizationLevel, Session};
@@ -3575,9 +3486,8 @@ mod tests {
     }
 }
 
-
 ================================================================================
-[12/43] TỆP: src/audio/stt.rs (325 dòng, 11,389 bytes)
+[10/43] TỆP: src/audio/stt.rs (325 dòng, 11,389 bytes)
 ================================================================================
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -3905,9 +3815,8 @@ impl Default for WhisperEngine {
     }
 }
 
-
 ================================================================================
-[13/43] TỆP: src/audio/vad.rs (289 dòng, 9,774 bytes)
+[11/43] TỆP: src/audio/vad.rs (289 dòng, 9,774 bytes)
 ================================================================================
 pub struct VadConfig {
     pub min_speech_ms: u32,
@@ -4199,9 +4108,8 @@ impl SileroVad {
     }
 }
 
-
 ================================================================================
-[14/43] TỆP: src/audio/wakeword.rs (302 dòng, 12,111 bytes)
+[12/43] TỆP: src/audio/wakeword.rs (302 dòng, 12,111 bytes)
 ================================================================================
 use crate::core::nlu::strip_vietnamese_accents;
 use regex::Regex;
@@ -4506,9 +4414,8 @@ mod tests {
     }
 }
 
-
 ================================================================================
-[15/43] TỆP: src/audio/wakeword_engine.rs (240 dòng, 9,007 bytes)
+[13/43] TỆP: src/audio/wakeword_engine.rs (240 dòng, 9,007 bytes)
 ================================================================================
 use crate::audio::oww::OpenWakeWordDetector;
 use crate::audio::vad::SileroVad;
@@ -4751,397 +4658,8 @@ impl UnifiedWakeWordEngine {
     }
 }
 
-
 ================================================================================
-[16/43] TỆP: src/bin/voice-overlay.rs (383 dòng, 11,494 bytes)
-================================================================================
-use gtk4::gdk::{Display, Key};
-use gtk4::glib;
-use gtk4::prelude::*;
-use gtk4::{
-    style_context_add_provider_for_display, Application, ApplicationWindow, Box as GtkBox, Button,
-    CssProvider, EventControllerKey, Label, Orientation, ScrolledWindow,
-};
-use serde::{Deserialize, Serialize};
-use std::cell::RefCell;
-use std::fs;
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::time::Instant;
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct AlexaUiState {
-    pub status: String,
-    pub text: String,
-    #[serde(default)]
-    pub subtext: String,
-    #[serde(default)]
-    pub query: String,
-    #[serde(default)]
-    pub is_long_text: bool,
-    #[serde(default)]
-    pub long_answer: String,
-    #[serde(default)]
-    pub updated_at: f64,
-}
-
-struct AppState {
-    last_status: String,
-    last_text: String,
-    last_query: String,
-    idle_since: Option<Instant>,
-    is_visible: bool,
-}
-
-const CUSTOM_CSS: &str = r#"
-window {
-    background-color: transparent;
-}
-
-.overlay-container {
-    background-color: rgba(18, 22, 34, 0.94);
-    border-radius: 24px;
-    border: 1.5px solid rgba(255, 255, 255, 0.16);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
-    padding: 16px 20px;
-    margin: 12px;
-}
-
-.overlay-container.listening {
-    border-color: #00d2ff;
-    box-shadow: 0 0 20px rgba(0, 210, 255, 0.45);
-}
-
-.overlay-container.thinking {
-    border-color: #a855f7;
-    box-shadow: 0 0 20px rgba(168, 85, 247, 0.45);
-}
-
-.overlay-container.speaking {
-    border-color: #10b981;
-    box-shadow: 0 0 22px rgba(16, 185, 129, 0.45);
-}
-
-.status-badge {
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.8px;
-    padding: 4px 12px;
-    border-radius: 12px;
-}
-
-.status-badge.listening {
-    background-color: rgba(0, 210, 255, 0.2);
-    color: #00d2ff;
-}
-
-.status-badge.thinking {
-    background-color: rgba(168, 85, 247, 0.2);
-    color: #d8b4fe;
-}
-
-.status-badge.speaking {
-    background-color: rgba(16, 185, 129, 0.2);
-    color: #34d399;
-}
-
-.status-badge.idle {
-    background-color: rgba(255, 255, 255, 0.08);
-    color: #94a3b8;
-}
-
-.query-label {
-    font-size: 14px;
-    font-style: italic;
-    color: #cbd5e1;
-    margin-top: 6px;
-    margin-bottom: 4px;
-}
-
-.answer-label {
-    font-size: 15px;
-    font-weight: 500;
-    line-height: 1.45;
-    color: #ffffff;
-    margin-top: 6px;
-}
-
-.dismiss-button {
-    background: transparent;
-    color: #94a3b8;
-    border: none;
-    border-radius: 50%;
-    padding: 2px 6px;
-    font-size: 14px;
-    font-weight: bold;
-}
-
-.dismiss-button:hover {
-    background: rgba(255, 255, 255, 0.15);
-    color: #ffffff;
-}
-"#;
-
-fn get_state_file_path() -> PathBuf {
-    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
-        let p = PathBuf::from(xdg).join("alexa_state.json");
-        if p.exists() {
-            return p;
-        }
-    }
-    PathBuf::from("/tmp/alexa_state.json")
-}
-
-fn read_ui_state() -> Option<AlexaUiState> {
-    let path = get_state_file_path();
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str::<AlexaUiState>(&content).ok()
-}
-
-fn build_ui(app: &Application) {
-    let window = ApplicationWindow::builder()
-        .application(app)
-        .title("Alexa Voice Overlay")
-        .decorated(false)
-        .default_width(540)
-        .resizable(false)
-        .build();
-
-    // Escape key controller to dismiss
-    let key_controller = EventControllerKey::new();
-    let win_esc = window.downgrade();
-    key_controller.connect_key_pressed(move |_, keyval, _, _| {
-        if keyval == Key::Escape {
-            if let Some(w) = win_esc.upgrade() {
-                w.set_visible(false);
-            }
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
-        }
-    });
-    window.add_controller(key_controller);
-
-    // Load custom CSS
-    let provider = CssProvider::new();
-    provider.load_from_data(CUSTOM_CSS);
-    if let Some(display) = Display::default() {
-        style_context_add_provider_for_display(
-            &display,
-            &provider,
-            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-    }
-
-    let root_box = GtkBox::new(Orientation::Vertical, 6);
-    root_box.add_css_class("overlay-container");
-
-    // Header box: Status Badge + Spacer + Close Button
-    let header_box = GtkBox::new(Orientation::Horizontal, 8);
-
-    let status_badge = Label::builder()
-        .label("⚡ SẴN SÀNG")
-        .halign(gtk4::Align::Start)
-        .css_classes(["status-badge", "idle"])
-        .build();
-
-    let close_btn = Button::builder()
-        .label("✕")
-        .halign(gtk4::Align::End)
-        .hexpand(true)
-        .css_classes(["dismiss-button"])
-        .build();
-
-    header_box.append(&status_badge);
-    header_box.append(&close_btn);
-    root_box.append(&header_box);
-
-    // Query Label
-    let query_label = Label::builder()
-        .label("")
-        .halign(gtk4::Align::Start)
-        .wrap(true)
-        .wrap_mode(gtk4::pango::WrapMode::WordChar)
-        .xalign(0.0)
-        .visible(false)
-        .css_classes(["query-label"])
-        .build();
-    root_box.append(&query_label);
-
-    // Answer Scroll + Label
-    let answer_label = Label::builder()
-        .label("")
-        .halign(gtk4::Align::Start)
-        .wrap(true)
-        .wrap_mode(gtk4::pango::WrapMode::WordChar)
-        .xalign(0.0)
-        .selectable(true)
-        .visible(false)
-        .css_classes(["answer-label"])
-        .build();
-
-    let scrolled_window = ScrolledWindow::builder()
-        .hscrollbar_policy(gtk4::PolicyType::Never)
-        .vscrollbar_policy(gtk4::PolicyType::Automatic)
-        .max_content_height(280)
-        .propagate_natural_height(true)
-        .child(&answer_label)
-        .visible(false)
-        .build();
-
-    root_box.append(&scrolled_window);
-    window.set_child(Some(&root_box));
-
-    let win_weak = window.downgrade();
-    close_btn.connect_clicked(move |_| {
-        if let Some(w) = win_weak.upgrade() {
-            w.set_visible(false);
-        }
-    });
-
-    let app_state = Rc::new(RefCell::new(AppState {
-        last_status: "idle".to_string(),
-        last_text: String::new(),
-        last_query: String::new(),
-        idle_since: None,
-        is_visible: false,
-    }));
-
-    // Poll /tmp/alexa_state.json every 60ms
-    let win_ref = window.clone();
-    let root_ref = root_box.clone();
-    let badge_ref = status_badge.clone();
-    let query_ref = query_label.clone();
-    let answer_ref = answer_label.clone();
-    let scroll_ref = scrolled_window.clone();
-    let state_holder = app_state.clone();
-
-    glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
-        if let Some(data) = read_ui_state() {
-            let mut st = state_holder.borrow_mut();
-            let status = data.status.to_lowercase();
-            let text = if data.is_long_text && !data.long_answer.is_empty() {
-                data.long_answer.clone()
-            } else {
-                data.text.clone()
-            };
-            let query = data.query.clone();
-
-            let status_changed = status != st.last_status;
-            let text_changed = text != st.last_text;
-            let query_changed = query != st.last_query;
-
-            if status_changed || text_changed || query_changed {
-                st.last_status = status.clone();
-                st.last_text = text.clone();
-                st.last_query = query.clone();
-
-                // Clear previous classes
-                root_ref.remove_css_class("listening");
-                root_ref.remove_css_class("thinking");
-                root_ref.remove_css_class("speaking");
-
-                badge_ref.remove_css_class("listening");
-                badge_ref.remove_css_class("thinking");
-                badge_ref.remove_css_class("speaking");
-                badge_ref.remove_css_class("idle");
-
-                match status.as_str() {
-                    "listening" => {
-                        root_ref.add_css_class("listening");
-                        badge_ref.add_css_class("listening");
-                        badge_ref.set_label("🎙️ ĐANG LẮNG NGHE...");
-                        query_ref.set_visible(false);
-                        scroll_ref.set_visible(false);
-                        answer_ref.set_visible(false);
-
-                        st.idle_since = None;
-                        if !st.is_visible {
-                            win_ref.set_visible(true);
-                            st.is_visible = true;
-                        }
-                    }
-                    "thinking" => {
-                        root_ref.add_css_class("thinking");
-                        badge_ref.add_css_class("thinking");
-                        badge_ref.set_label("🧠 ĐANG XỬ LÝ...");
-
-                        if !query.is_empty() {
-                            query_ref.set_label(&format!("👤 \"{}\"", query));
-                            query_ref.set_visible(true);
-                        } else {
-                            query_ref.set_visible(false);
-                        }
-                        scroll_ref.set_visible(false);
-                        answer_ref.set_visible(false);
-
-                        st.idle_since = None;
-                        if !st.is_visible {
-                            win_ref.set_visible(true);
-                            st.is_visible = true;
-                        }
-                    }
-                    "speaking" => {
-                        root_ref.add_css_class("speaking");
-                        badge_ref.add_css_class("speaking");
-                        badge_ref.set_label("🔊 TRỢ LÝ AI");
-
-                        if !query.is_empty() {
-                            query_ref.set_label(&format!("👤 \"{}\"", query));
-                            query_ref.set_visible(true);
-                        }
-
-                        if !text.is_empty() {
-                            answer_ref.set_label(&text);
-                            answer_ref.set_visible(true);
-                            scroll_ref.set_visible(true);
-                        }
-
-                        st.idle_since = None;
-                        if !st.is_visible {
-                            win_ref.set_visible(true);
-                            st.is_visible = true;
-                        }
-                    }
-                    _ => {
-                        // Idle
-                        badge_ref.add_css_class("idle");
-                        badge_ref.set_label("⚡ SẴN SÀNG");
-                        if st.idle_since.is_none() && st.is_visible {
-                            st.idle_since = Some(Instant::now());
-                        }
-                    }
-                }
-            } else if status == "idle" && st.is_visible {
-                // If it was idle for > 4.5 seconds, auto-hide the overlay
-                if let Some(since) = st.idle_since {
-                    if since.elapsed().as_secs_f32() > 4.5 {
-                        win_ref.set_visible(false);
-                        st.is_visible = false;
-                        st.idle_since = None;
-                    }
-                }
-            }
-        }
-        glib::ControlFlow::Continue
-    });
-
-    // Initially start hidden until wake word or trigger activates
-    window.set_visible(false);
-}
-
-fn main() {
-    let app = Application::builder()
-        .application_id("com.tudm.voiceai.overlay")
-        .build();
-
-    app.connect_activate(build_ui);
-    app.run_with_args::<String>(&[]);
-}
-
-
-================================================================================
-[17/43] TỆP: src/bin/ai-assistant/context.rs (92 dòng, 3,524 bytes)
+[14/43] TỆP: src/bin/ai-assistant/context.rs (98 dòng, 3,771 bytes)
 ================================================================================
 use clap::Parser;
 use std::collections::HashMap;
@@ -5201,6 +4719,12 @@ pub struct Args {
 
     #[arg(long, help = "Hiển thị trực tiếp điểm Silero VAD & openWakeWord theo thời gian thực")]
     pub debug_audio: bool,
+
+    #[arg(long, help = "Mở giao diện gõ văn bản trực tiếp (Text Mode / Chat) trên Overlay")]
+    pub chat: bool,
+
+    #[arg(long, help = "Chế độ yên lặng khi truy vấn --query (không phát âm TTS)")]
+    pub silent: bool,
 }
 
 #[derive(Clone)]
@@ -5236,9 +4760,8 @@ impl AppContext {
     }
 }
 
-
 ================================================================================
-[18/43] TỆP: src/bin/ai-assistant/daemon.rs (387 dòng, 17,254 bytes)
+[15/43] TỆP: src/bin/ai-assistant/daemon.rs (391 dòng, 17,475 bytes)
 ================================================================================
 use super::context::AppContext;
 use std::sync::Arc;
@@ -5345,7 +4868,11 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
                     }
                 });
             }
-            ActionRequest::Query { text, deep } => {
+            ActionRequest::Chat => {
+                println!("💬 Nhận sự kiện Chat: Bật giao diện nhập văn bản...");
+                ctx.state_manager.trigger_chat();
+            }
+            ActionRequest::Query { text, deep, silent } => {
                 if ctx.tts.is_speaking() || ctx.state_manager.get_state_sync() != AssistantState::Idle {
                     ctx.state_manager.stop_all();
                     tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
@@ -5384,7 +4911,7 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
                             )
                             .await;
 
-                        if act_ctx.tts.is_available() && !rep.is_empty() {
+                        if !silent && act_ctx.tts.is_available() && !rep.is_empty() {
                             let tts_bg = act_ctx.tts.clone();
                             let mgr_bg = act_ctx.state_manager.clone();
                             let rep_bg = rep.clone();
@@ -5402,7 +4929,7 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
                             &text,
                             deep,
                             true,
-                            true,
+                            !silent,
                         )
                         .await;
                     }
@@ -5628,9 +5155,8 @@ pub async fn run_wake_word_loop(
     }
 }
 
-
 ================================================================================
-[19/43] TỆP: src/bin/ai-assistant/diagnostics.rs (172 dòng, 5,964 bytes)
+[16/43] TỆP: src/bin/ai-assistant/diagnostics.rs (172 dòng, 5,964 bytes)
 ================================================================================
 use std::io::{self, Write};
 use std::time::Instant;
@@ -5805,9 +5331,8 @@ pub fn run_audio_debugger() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-
 ================================================================================
-[20/43] TỆP: src/bin/ai-assistant/main.rs (213 dòng, 8,030 bytes)
+[17/43] TỆP: src/bin/ai-assistant/main.rs (221 dòng, 8,391 bytes)
 ================================================================================
 mod context;
 mod daemon;
@@ -5864,6 +5389,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if args.chat {
+        match send_ipc_command(&config.socket_path, "chat", None).await {
+            Ok(resp) => println!("💬 Đã gửi lệnh mở Chat Mode: {:?}", resp.message),
+            Err(e) => eprintln!("⚠️ Lỗi gửi chat: {}", e),
+        }
+        return Ok(());
+    }
 
     // 2. Nhóm công cụ chẩn đoán & đo hiệu năng
     if args.benchmark {
@@ -5899,6 +5431,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "query",
                 Some(q.clone()),
                 Some(args.deep),
+                Some(args.silent),
             )
             .await
             .is_ok()
@@ -5916,13 +5449,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if handled {
             println!("🤖 [Fast-Path]: {}", reply);
-            if args.voice && ctx.tts.is_available() {
+            if args.voice && !args.silent && ctx.tts.is_available() {
                 let tts_c = ctx.tts.clone();
                 let rep_c = reply.clone();
                 let _ = tokio::task::spawn_blocking(move || tts_c.speak(&rep_c, None)).await;
             }
         } else {
-            pipeline::execute_llm_query(&ctx, &q, args.deep, false, args.voice).await;
+            pipeline::execute_llm_query(&ctx, &q, args.deep, false, args.voice && !args.silent).await;
         }
         return Ok(());
     }
@@ -6023,9 +5556,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     daemon::run_daemon(ctx).await
 }
 
-
 ================================================================================
-[21/43] TỆP: src/bin/ai-assistant/pipeline.rs (476 dòng, 16,622 bytes)
+[18/43] TỆP: src/bin/ai-assistant/pipeline.rs (476 dòng, 16,622 bytes)
 ================================================================================
 use super::context::AppContext;
 use std::io::{self, Write};
@@ -6504,12 +6036,42 @@ pub async fn execute_llm_query(
     }
 }
 
-
 ================================================================================
-[22/43] TỆP: src/bin/ai-assistant/platform.rs (153 dòng, 5,748 bytes)
+[19/43] TỆP: src/bin/ai-assistant/platform.rs (239 dòng, 8,506 bytes)
 ================================================================================
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+
+fn load_live_user_env() -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    if let Ok(out) = Command::new("systemctl")
+        .args(["--user", "show-environment"])
+        .output()
+    {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    env.insert(k.to_string(), v.to_string());
+                }
+            }
+        }
+    }
+    env
+}
+
+fn find_xwayland_auth(runtime_dir: &str) -> Option<String> {
+    if let Ok(entries) = std::fs::read_dir(runtime_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let s = name.to_string_lossy();
+            if s.starts_with(".mutter-Xwaylandauth.") {
+                return Some(entry.path().to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
 
 pub fn ensure_overlay_running() {
     let qml_check = Command::new("pgrep")
@@ -6519,6 +6081,51 @@ pub fn ensure_overlay_running() {
         if out.status.success() {
             return;
         }
+    }
+
+    let live_env = load_live_user_env();
+    let runtime_dir = live_env
+        .get("XDG_RUNTIME_DIR")
+        .cloned()
+        .or_else(|| std::env::var("XDG_RUNTIME_DIR").ok())
+        .unwrap_or_else(|| "/run/user/1000".to_string());
+
+    let display = live_env
+        .get("DISPLAY")
+        .cloned()
+        .or_else(|| std::env::var("DISPLAY").ok());
+    let wayland = live_env
+        .get("WAYLAND_DISPLAY")
+        .cloned()
+        .or_else(|| std::env::var("WAYLAND_DISPLAY").ok());
+
+    // Chưa vào phiên đồ họa hoàn chỉnh (mới boot) -> bỏ qua để vòng lặp 5s thử lại
+    if display.is_none() && wayland.is_none() {
+        return;
+    }
+
+    let is_gnome = live_env
+        .get("XDG_CURRENT_DESKTOP")
+        .cloned()
+        .or_else(|| std::env::var("XDG_CURRENT_DESKTOP").ok())
+        .unwrap_or_default()
+        .to_lowercase()
+        .contains("gnome")
+        || Command::new("pgrep")
+            .args(["-x", "gnome-shell"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+    let xauth = live_env
+        .get("XAUTHORITY")
+        .cloned()
+        .or_else(|| std::env::var("XAUTHORITY").ok())
+        .or_else(|| find_xwayland_auth(&runtime_dir));
+
+    // Trên GNOME cần chạy XCB (XWayland) -> đợi đến khi DISPLAY sẵn sàng
+    if is_gnome && display.is_none() {
+        return;
     }
 
     let home = dirs::home_dir().unwrap_or_default();
@@ -6541,16 +6148,22 @@ pub fn ensure_overlay_running() {
     if let (Some(qs), Some(qml_path)) = (qs_bin, qml_candidates.iter().find(|p| p.exists())) {
         let mut cmd = Command::new(qs);
         cmd.args(["-p", qml_path.to_str().unwrap_or_default()]);
+        cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
-            .unwrap_or_default()
-            .to_lowercase()
-            .contains("gnome");
+        if let Some(ref d) = display {
+            cmd.env("DISPLAY", d);
+        }
+        if let Some(ref w) = wayland {
+            cmd.env("WAYLAND_DISPLAY", w);
+        }
+        if let Some(ref xa) = xauth {
+            cmd.env("XAUTHORITY", xa);
+        }
+        if let Some(dbus) = live_env.get("DBUS_SESSION_BUS_ADDRESS") {
+            cmd.env("DBUS_SESSION_BUS_ADDRESS", dbus);
+        }
         if is_gnome {
             cmd.env("QT_QPA_PLATFORM", "xcb");
-        }
-        if std::env::var("DISPLAY").is_err() {
-            cmd.env("DISPLAY", ":0");
         }
 
         match cmd
@@ -6558,11 +6171,15 @@ pub fn ensure_overlay_running() {
             .stderr(std::process::Stdio::null())
             .spawn()
         {
-            Ok(_) => {
+            Ok(mut child) => {
                 println!(
-                    "🖥️ Đã khởi chạy giao diện Quickshell Dynamic Island Overlay: {:?}",
-                    qml_path
+                    "🖥️ Đã khởi chạy Quickshell Overlay (display={:?}, gnome={}): {:?}",
+                    display, is_gnome, qml_path
                 );
+                // Thu dọn tiến trình nếu qs thoát sớm để tránh sinh zombie
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
                 return;
             }
             Err(e) => eprintln!("⚠️ Lỗi khởi chạy Quickshell overlay: {}", e),
@@ -6662,9 +6279,486 @@ pub fn ensure_mic_levels() {
         .output();
 }
 
+================================================================================
+[20/43] TỆP: src/bin/voice-overlay.rs (383 dòng, 11,494 bytes)
+================================================================================
+use gtk4::gdk::{Display, Key};
+use gtk4::glib;
+use gtk4::prelude::*;
+use gtk4::{
+    style_context_add_provider_for_display, Application, ApplicationWindow, Box as GtkBox, Button,
+    CssProvider, EventControllerKey, Label, Orientation, ScrolledWindow,
+};
+use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::fs;
+use std::path::PathBuf;
+use std::rc::Rc;
+use std::time::Instant;
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct AlexaUiState {
+    pub status: String,
+    pub text: String,
+    #[serde(default)]
+    pub subtext: String,
+    #[serde(default)]
+    pub query: String,
+    #[serde(default)]
+    pub is_long_text: bool,
+    #[serde(default)]
+    pub long_answer: String,
+    #[serde(default)]
+    pub updated_at: f64,
+}
+
+struct AppState {
+    last_status: String,
+    last_text: String,
+    last_query: String,
+    idle_since: Option<Instant>,
+    is_visible: bool,
+}
+
+const CUSTOM_CSS: &str = r#"
+window {
+    background-color: transparent;
+}
+
+.overlay-container {
+    background-color: rgba(18, 22, 34, 0.94);
+    border-radius: 24px;
+    border: 1.5px solid rgba(255, 255, 255, 0.16);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+    padding: 16px 20px;
+    margin: 12px;
+}
+
+.overlay-container.listening {
+    border-color: #00d2ff;
+    box-shadow: 0 0 20px rgba(0, 210, 255, 0.45);
+}
+
+.overlay-container.thinking {
+    border-color: #a855f7;
+    box-shadow: 0 0 20px rgba(168, 85, 247, 0.45);
+}
+
+.overlay-container.speaking {
+    border-color: #10b981;
+    box-shadow: 0 0 22px rgba(16, 185, 129, 0.45);
+}
+
+.status-badge {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    padding: 4px 12px;
+    border-radius: 12px;
+}
+
+.status-badge.listening {
+    background-color: rgba(0, 210, 255, 0.2);
+    color: #00d2ff;
+}
+
+.status-badge.thinking {
+    background-color: rgba(168, 85, 247, 0.2);
+    color: #d8b4fe;
+}
+
+.status-badge.speaking {
+    background-color: rgba(16, 185, 129, 0.2);
+    color: #34d399;
+}
+
+.status-badge.idle {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: #94a3b8;
+}
+
+.query-label {
+    font-size: 14px;
+    font-style: italic;
+    color: #cbd5e1;
+    margin-top: 6px;
+    margin-bottom: 4px;
+}
+
+.answer-label {
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.45;
+    color: #ffffff;
+    margin-top: 6px;
+}
+
+.dismiss-button {
+    background: transparent;
+    color: #94a3b8;
+    border: none;
+    border-radius: 50%;
+    padding: 2px 6px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.dismiss-button:hover {
+    background: rgba(255, 255, 255, 0.15);
+    color: #ffffff;
+}
+"#;
+
+fn get_state_file_path() -> PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        let p = PathBuf::from(xdg).join("alexa_state.json");
+        if p.exists() {
+            return p;
+        }
+    }
+    PathBuf::from("/tmp/alexa_state.json")
+}
+
+fn read_ui_state() -> Option<AlexaUiState> {
+    let path = get_state_file_path();
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<AlexaUiState>(&content).ok()
+}
+
+fn build_ui(app: &Application) {
+    let window = ApplicationWindow::builder()
+        .application(app)
+        .title("Alexa Voice Overlay")
+        .decorated(false)
+        .default_width(540)
+        .resizable(false)
+        .build();
+
+    // Escape key controller to dismiss
+    let key_controller = EventControllerKey::new();
+    let win_esc = window.downgrade();
+    key_controller.connect_key_pressed(move |_, keyval, _, _| {
+        if keyval == Key::Escape {
+            if let Some(w) = win_esc.upgrade() {
+                w.set_visible(false);
+            }
+            glib::Propagation::Stop
+        } else {
+            glib::Propagation::Proceed
+        }
+    });
+    window.add_controller(key_controller);
+
+    // Load custom CSS
+    let provider = CssProvider::new();
+    provider.load_from_data(CUSTOM_CSS);
+    if let Some(display) = Display::default() {
+        style_context_add_provider_for_display(
+            &display,
+            &provider,
+            gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+    }
+
+    let root_box = GtkBox::new(Orientation::Vertical, 6);
+    root_box.add_css_class("overlay-container");
+
+    // Header box: Status Badge + Spacer + Close Button
+    let header_box = GtkBox::new(Orientation::Horizontal, 8);
+
+    let status_badge = Label::builder()
+        .label("⚡ SẴN SÀNG")
+        .halign(gtk4::Align::Start)
+        .css_classes(["status-badge", "idle"])
+        .build();
+
+    let close_btn = Button::builder()
+        .label("✕")
+        .halign(gtk4::Align::End)
+        .hexpand(true)
+        .css_classes(["dismiss-button"])
+        .build();
+
+    header_box.append(&status_badge);
+    header_box.append(&close_btn);
+    root_box.append(&header_box);
+
+    // Query Label
+    let query_label = Label::builder()
+        .label("")
+        .halign(gtk4::Align::Start)
+        .wrap(true)
+        .wrap_mode(gtk4::pango::WrapMode::WordChar)
+        .xalign(0.0)
+        .visible(false)
+        .css_classes(["query-label"])
+        .build();
+    root_box.append(&query_label);
+
+    // Answer Scroll + Label
+    let answer_label = Label::builder()
+        .label("")
+        .halign(gtk4::Align::Start)
+        .wrap(true)
+        .wrap_mode(gtk4::pango::WrapMode::WordChar)
+        .xalign(0.0)
+        .selectable(true)
+        .visible(false)
+        .css_classes(["answer-label"])
+        .build();
+
+    let scrolled_window = ScrolledWindow::builder()
+        .hscrollbar_policy(gtk4::PolicyType::Never)
+        .vscrollbar_policy(gtk4::PolicyType::Automatic)
+        .max_content_height(280)
+        .propagate_natural_height(true)
+        .child(&answer_label)
+        .visible(false)
+        .build();
+
+    root_box.append(&scrolled_window);
+    window.set_child(Some(&root_box));
+
+    let win_weak = window.downgrade();
+    close_btn.connect_clicked(move |_| {
+        if let Some(w) = win_weak.upgrade() {
+            w.set_visible(false);
+        }
+    });
+
+    let app_state = Rc::new(RefCell::new(AppState {
+        last_status: "idle".to_string(),
+        last_text: String::new(),
+        last_query: String::new(),
+        idle_since: None,
+        is_visible: false,
+    }));
+
+    // Poll /tmp/alexa_state.json every 60ms
+    let win_ref = window.clone();
+    let root_ref = root_box.clone();
+    let badge_ref = status_badge.clone();
+    let query_ref = query_label.clone();
+    let answer_ref = answer_label.clone();
+    let scroll_ref = scrolled_window.clone();
+    let state_holder = app_state.clone();
+
+    glib::timeout_add_local(std::time::Duration::from_millis(60), move || {
+        if let Some(data) = read_ui_state() {
+            let mut st = state_holder.borrow_mut();
+            let status = data.status.to_lowercase();
+            let text = if data.is_long_text && !data.long_answer.is_empty() {
+                data.long_answer.clone()
+            } else {
+                data.text.clone()
+            };
+            let query = data.query.clone();
+
+            let status_changed = status != st.last_status;
+            let text_changed = text != st.last_text;
+            let query_changed = query != st.last_query;
+
+            if status_changed || text_changed || query_changed {
+                st.last_status = status.clone();
+                st.last_text = text.clone();
+                st.last_query = query.clone();
+
+                // Clear previous classes
+                root_ref.remove_css_class("listening");
+                root_ref.remove_css_class("thinking");
+                root_ref.remove_css_class("speaking");
+
+                badge_ref.remove_css_class("listening");
+                badge_ref.remove_css_class("thinking");
+                badge_ref.remove_css_class("speaking");
+                badge_ref.remove_css_class("idle");
+
+                match status.as_str() {
+                    "listening" => {
+                        root_ref.add_css_class("listening");
+                        badge_ref.add_css_class("listening");
+                        badge_ref.set_label("🎙️ ĐANG LẮNG NGHE...");
+                        query_ref.set_visible(false);
+                        scroll_ref.set_visible(false);
+                        answer_ref.set_visible(false);
+
+                        st.idle_since = None;
+                        if !st.is_visible {
+                            win_ref.set_visible(true);
+                            st.is_visible = true;
+                        }
+                    }
+                    "thinking" => {
+                        root_ref.add_css_class("thinking");
+                        badge_ref.add_css_class("thinking");
+                        badge_ref.set_label("🧠 ĐANG XỬ LÝ...");
+
+                        if !query.is_empty() {
+                            query_ref.set_label(&format!("👤 \"{}\"", query));
+                            query_ref.set_visible(true);
+                        } else {
+                            query_ref.set_visible(false);
+                        }
+                        scroll_ref.set_visible(false);
+                        answer_ref.set_visible(false);
+
+                        st.idle_since = None;
+                        if !st.is_visible {
+                            win_ref.set_visible(true);
+                            st.is_visible = true;
+                        }
+                    }
+                    "speaking" => {
+                        root_ref.add_css_class("speaking");
+                        badge_ref.add_css_class("speaking");
+                        badge_ref.set_label("🔊 TRỢ LÝ AI");
+
+                        if !query.is_empty() {
+                            query_ref.set_label(&format!("👤 \"{}\"", query));
+                            query_ref.set_visible(true);
+                        }
+
+                        if !text.is_empty() {
+                            answer_ref.set_label(&text);
+                            answer_ref.set_visible(true);
+                            scroll_ref.set_visible(true);
+                        }
+
+                        st.idle_since = None;
+                        if !st.is_visible {
+                            win_ref.set_visible(true);
+                            st.is_visible = true;
+                        }
+                    }
+                    _ => {
+                        // Idle
+                        badge_ref.add_css_class("idle");
+                        badge_ref.set_label("⚡ SẴN SÀNG");
+                        if st.idle_since.is_none() && st.is_visible {
+                            st.idle_since = Some(Instant::now());
+                        }
+                    }
+                }
+            } else if status == "idle" && st.is_visible {
+                // If it was idle for > 4.5 seconds, auto-hide the overlay
+                if let Some(since) = st.idle_since {
+                    if since.elapsed().as_secs_f32() > 4.5 {
+                        win_ref.set_visible(false);
+                        st.is_visible = false;
+                        st.idle_since = None;
+                    }
+                }
+            }
+        }
+        glib::ControlFlow::Continue
+    });
+
+    // Initially start hidden until wake word or trigger activates
+    window.set_visible(false);
+}
+
+fn main() {
+    let app = Application::builder()
+        .application_id("com.tudm.voiceai.overlay")
+        .build();
+
+    app.connect_activate(build_ui);
+    app.run_with_args::<String>(&[]);
+}
 
 ================================================================================
-[23/43] TỆP: src/core/memory.rs (168 dòng, 4,981 bytes)
+[21/43] TỆP: src/config.rs (87 dòng, 4,023 bytes)
+================================================================================
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+pub const DEFAULT_SOCKET_PATH: &str = "/tmp/voice_ai_state.sock";
+pub const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
+pub const DEFAULT_MODEL: &str = "qwen3.8:2b";
+pub const SAMPLE_RATE: u32 = 16000;
+pub const CHUNK_SIZE: usize = 1280;
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub socket_path: PathBuf,
+    pub ollama_url: String,
+    pub model: String,
+    pub sample_rate: u32,
+    pub chunk_size: usize,
+    pub url_shortcuts: HashMap<String, String>,
+    pub url_display_names: HashMap<String, String>,
+    pub app_aliases: HashMap<String, String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        let socket_path = std::env::var("VOICE_AI_SOCKET")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOCKET_PATH));
+
+        let ollama_url = std::env::var("OLLAMA_HOST")
+            .unwrap_or_else(|_| DEFAULT_OLLAMA_URL.to_string())
+            .trim_end_matches('/')
+            .to_string();
+
+        let model = std::env::var("AI_ASSISTANT_LLM_MODEL")
+            .unwrap_or_else(|_| DEFAULT_MODEL.to_string());
+
+        let mut url_shortcuts = HashMap::new();
+        url_shortcuts.insert("youtube".into(), "https://www.youtube.com".into());
+        url_shortcuts.insert("gmail".into(), "https://mail.google.com".into());
+        url_shortcuts.insert("facebook".into(), "https://www.facebook.com".into());
+        url_shortcuts.insert("github".into(), "https://github.com".into());
+        url_shortcuts.insert("zalo".into(), "https://chat.zalo.me".into());
+        url_shortcuts.insert("spotify".into(), "https://open.spotify.com".into());
+        url_shortcuts.insert("google".into(), "https://www.google.com".into());
+        url_shortcuts.insert("chrome".into(), "https://www.google.com".into());
+        url_shortcuts.insert("google chrome".into(), "https://www.google.com".into());
+        url_shortcuts.insert("chatgpt".into(), "https://chatgpt.com".into());
+        url_shortcuts.insert("claude".into(), "https://claude.ai".into());
+        url_shortcuts.insert("gemini".into(), "https://gemini.google.com".into());
+
+        let mut url_display_names = HashMap::new();
+        url_display_names.insert("youtube".into(), "YouTube".into());
+        url_display_names.insert("gmail".into(), "Gmail".into());
+        url_display_names.insert("facebook".into(), "Facebook".into());
+        url_display_names.insert("github".into(), "GitHub".into());
+        url_display_names.insert("zalo".into(), "Zalo".into());
+        url_display_names.insert("spotify".into(), "Spotify".into());
+        url_display_names.insert("google".into(), "Google".into());
+        url_display_names.insert("chrome".into(), "Google Chrome".into());
+        url_display_names.insert("google chrome".into(), "Google Chrome".into());
+
+        let mut app_aliases = HashMap::new();
+        app_aliases.insert("vs code".into(), "code".into());
+        app_aliases.insert("vscode".into(), "code".into());
+        app_aliases.insert("visual studio code".into(), "code".into());
+        app_aliases.insert("terminal".into(), "terminal".into());
+        app_aliases.insert("terminal emulator".into(), "terminal".into());
+        app_aliases.insert("trình duyệt".into(), "browser".into(),);
+        app_aliases.insert("firefox".into(), "firefox".into());
+        app_aliases.insert("chrome".into(), "google-chrome".into());
+        app_aliases.insert("google chrome".into(), "google-chrome".into());
+        app_aliases.insert("brave".into(), "brave-browser".into());
+        app_aliases.insert("spotify".into(), "spotify".into());
+        app_aliases.insert("zalo".into(), "zalo".into());
+        app_aliases.insert("telegram".into(), "telegram".into());
+
+        Self {
+            socket_path,
+            ollama_url,
+            model,
+            sample_rate: SAMPLE_RATE,
+            chunk_size: CHUNK_SIZE,
+            url_shortcuts,
+            url_display_names,
+            app_aliases,
+        }
+    }
+}
+
+================================================================================
+[22/43] TỆP: src/core/memory.rs (168 dòng, 4,981 bytes)
 ================================================================================
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -6835,212 +6929,15 @@ mod tests {
     }
 }
 
-
 ================================================================================
-[24/43] TỆP: src/core/mod.rs (3 dòng, 44 bytes)
+[23/43] TỆP: src/core/mod.rs (3 dòng, 44 bytes)
 ================================================================================
 pub mod state;
 pub mod nlu;
 pub mod memory;
 
-
 ================================================================================
-[25/43] TỆP: src/core/state.rs (190 dòng, 5,648 bytes)
-================================================================================
-use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
-use tokio::sync::broadcast;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AssistantState {
-    Idle = 0,
-    Listening = 1,
-    Thinking = 2,
-    Speaking = 3,
-    Disabled = 4,
-}
-
-impl From<u8> for AssistantState {
-    fn from(v: u8) -> Self {
-        match v {
-            1 => AssistantState::Listening,
-            2 => AssistantState::Thinking,
-            3 => AssistantState::Speaking,
-            4 => AssistantState::Disabled,
-            _ => AssistantState::Idle,
-        }
-    }
-}
-
-impl std::fmt::Display for AssistantState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AssistantState::Idle => write!(f, "idle"),
-            AssistantState::Listening => write!(f, "listening"),
-            AssistantState::Thinking => write!(f, "thinking"),
-            AssistantState::Speaking => write!(f, "speaking"),
-            AssistantState::Disabled => write!(f, "disabled"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StateEvent {
-    pub state: AssistantState,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub visual: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlexaUiState {
-    pub status: String,
-    pub text: String,
-    pub subtext: String,
-    pub query: String,
-    pub is_long_text: bool,
-    pub long_answer: String,
-    pub updated_at: f64,
-}
-
-static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-fn write_ui_state_atomic(state: &AlexaUiState) {
-    if let Ok(json_str) = serde_json::to_string(state) {
-        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-        let targets = [
-            std::env::var("XDG_RUNTIME_DIR")
-                .map(|d| format!("{}/alexa_state.json", d))
-                .unwrap_or_else(|_| "/tmp/alexa_state.json".to_string()),
-            "/tmp/alexa_state.json".to_string(),
-        ];
-
-        for path in targets {
-            let tmp_path = format!("{}.tmp.{}.{}", path, std::process::id(), seq);
-            if std::fs::write(&tmp_path, &json_str).is_ok() {
-                let _ = std::fs::rename(&tmp_path, &path);
-            }
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct StateManager {
-    current_state: Arc<AtomicU8>,
-    broadcaster: broadcast::Sender<StateEvent>,
-    is_interrupted: Arc<AtomicBool>,
-    manual_trigger: Arc<AtomicBool>,
-}
-
-impl StateManager {
-    pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(128);
-        Self {
-            current_state: Arc::new(AtomicU8::new(AssistantState::Idle as u8)),
-            broadcaster: tx,
-            is_interrupted: Arc::new(AtomicBool::new(false)),
-            manual_trigger: Arc::new(AtomicBool::new(false)),
-        }
-    }
-
-    pub fn get_state_sync(&self) -> AssistantState {
-        AssistantState::from(self.current_state.load(Ordering::SeqCst))
-    }
-
-    pub async fn get_state(&self) -> AssistantState {
-        self.get_state_sync()
-    }
-
-    pub async fn set_state_full(
-        &self,
-        new_state: AssistantState,
-        text: Option<String>,
-        query: Option<String>,
-    ) {
-        self.current_state.store(new_state as u8, Ordering::SeqCst);
-
-        let now_sec = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-
-        let t = text.clone().unwrap_or_default();
-        let q = query.unwrap_or_default();
-        let is_long = t.len() > 60;
-
-        let ui_state = AlexaUiState {
-            status: new_state.to_string(),
-            text: t.clone(),
-            subtext: String::new(),
-            query: q,
-            is_long_text: is_long,
-            long_answer: if is_long { t.clone() } else { String::new() },
-            updated_at: now_sec,
-        };
-
-        write_ui_state_atomic(&ui_state);
-
-        let event = StateEvent {
-            state: new_state,
-            text,
-            visual: None,
-        };
-        let _ = self.broadcaster.send(event);
-    }
-
-    pub async fn set_state(&self, new_state: AssistantState, text: Option<String>) {
-        self.set_state_full(new_state, text, None).await;
-    }
-
-    pub fn subscribe(&self) -> broadcast::Receiver<StateEvent> {
-        self.broadcaster.subscribe()
-    }
-
-    pub fn interrupt(&self) {
-        self.is_interrupted.store(true, Ordering::SeqCst);
-    }
-
-    pub fn reset_interrupt(&self) {
-        self.is_interrupted.store(false, Ordering::SeqCst);
-    }
-
-    pub fn is_interrupted(&self) -> bool {
-        self.is_interrupted.load(Ordering::SeqCst)
-    }
-
-    /// Đánh thức luồng thu âm ngay lập tức (dùng cho --trigger và --relisten)
-    pub fn trigger_listen(&self) {
-        self.manual_trigger.store(true, Ordering::SeqCst);
-        self.is_interrupted.store(true, Ordering::SeqCst);
-    }
-
-    /// Dừng mọi tác vụ đang nói / đang thu mà không mở lại mic
-    pub fn stop_all(&self) {
-        self.manual_trigger.store(false, Ordering::SeqCst);
-        self.is_interrupted.store(true, Ordering::SeqCst);
-    }
-
-    pub fn has_manual_trigger(&self) -> bool {
-        self.manual_trigger.load(Ordering::SeqCst)
-    }
-
-    pub fn take_manual_trigger(&self) -> bool {
-        self.manual_trigger.swap(false, Ordering::SeqCst)
-    }
-}
-
-impl Default for StateManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-
-================================================================================
-[26/43] TỆP: src/core/nlu/fuzzy.rs (68 dòng, 2,382 bytes)
+[24/43] TỆP: src/core/nlu/fuzzy.rs (68 dòng, 2,382 bytes)
 ================================================================================
 use crate::core::nlu::normalize::strip_vietnamese_accents;
 use strsim::sorensen_dice;
@@ -7111,9 +7008,8 @@ pub fn fuzzy_match_canonical_action(text: &str, threshold: f64) -> Option<(&'sta
     }
 }
 
-
 ================================================================================
-[27/43] TỆP: src/core/nlu/mod.rs (7 dòng, 165 bytes)
+[25/43] TỆP: src/core/nlu/mod.rs (7 dòng, 165 bytes)
 ================================================================================
 pub mod normalize;
 pub mod patterns;
@@ -7123,9 +7019,8 @@ pub mod router;
 pub use normalize::{clean_user_input, strip_vietnamese_accents};
 pub use router::fast_path_nlu;
 
-
 ================================================================================
-[28/43] TỆP: src/core/nlu/normalize.rs (265 dòng, 14,164 bytes)
+[26/43] TỆP: src/core/nlu/normalize.rs (303 dòng, 15,772 bytes)
 ================================================================================
 use regex::Regex;
 use std::sync::LazyLock;
@@ -7321,10 +7216,6 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         (r"(?i)\b(?:quý\s*vị\s*hẹn\s*giờ)\b", "hủy hẹn giờ"),
         (r"(?i)\b(?:uốc\s*(?:xây|bay|sờ\s*bây)|quốc\s*(?:xây|bay|sờ\s*bây))\b", "workspace"),
         (r"(?i)\b(?:híp\s*(?:len|lần|lan|lơn)|hai\s*pơ\s*(?:len|lan))\b", "hyprland"),
-        // Gọt từ mở đầu lịch sự
-        (r"(?i)^(?:hãy|làm\s+ơn|cho\s+(?:tôi|mình|anh|em)|giúp\s+(?:tôi|mình))\s+", ""),
-        // Gọt hậu tố lịch sự/khẩu ngữ ở cuối câu
-        (r"(?i)\s+(?:giúp\s+(?:tôi|mình|nhé|nha)|hộ\s+(?:tôi|mình|cái)|cho\s+(?:tôi|mình)|lên\s+đi|lên\s+nhé|lên|đi|nhé|nha|với|ạ)$", ""),
     ];
 
     rules
@@ -7336,12 +7227,25 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         .collect()
 });
 
+pub static POLITE_PREFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)^(?:hãy|làm\s+ơn|vui\s+lòng|xin\s+vui\s+lòng|nhờ\s+(?:bạn|em|trợ\s+lý|máy)|phiền\s+(?:bạn|em)|bạn\s+(?:có\s+thể|hãy)|cho\s+(?:tôi|mình|anh|em)|giúp\s+(?:tôi|mình))\s+").unwrap()
+});
+
+pub static MID_VERB_POLITE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(mở|bật|chạy|vào|khởi\s+động|tắt|đóng|thoát|dừng|tạm\s+dừng|chuyển|tăng|giảm)\s+(?:giúp|hộ|giùm|cho)\s+(?:tôi|mình|em|anh|chị|tao)\s+").unwrap()
+});
+
+pub static POLITE_SUFFIX_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\s+(?:giúp\s+(?:tôi|mình|nhé|nha)|hộ\s+(?:tôi|mình|cái)|cho\s+(?:tôi|mình|em)|lên\s+đi|lên\s+nhé|lên|đi\s+nhé|đi|nhé|nha|với\s+nhé|với|ạ|được\s+không|được\s+chứ)$").unwrap()
+});
+
 pub static MULTI_SPACE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s+").unwrap());
 
 /// Làm sạch và chuẩn hóa văn bản đầu vào:
 /// - Chuẩn hóa NFKC
 /// - Tự động khôi phục dấu tiếng Việt từ unaccented map
 /// - Lọc nhiễu âm Whisper
+/// - Loại bỏ từ đệm, tiền tố, hậu tố và lời chen lịch sự tiếng Việt
 pub fn clean_user_input(text: &str) -> String {
     if text.is_empty() {
         return String::new();
@@ -7360,6 +7264,23 @@ pub fn clean_user_input(text: &str) -> String {
     for rule in PHONETIC_CLEANUP_RULES.iter() {
         if rule.pattern.is_match(&t) {
             t = rule.pattern.replace_all(&t, rule.replacement).to_string();
+        }
+    }
+
+    // Làm sạch tiền tố, hậu tố và lời chen lịch sự lặp lại tối đa 3 vòng
+    for _ in 0..3 {
+        let prev = t.clone();
+        if POLITE_PREFIX_RE.is_match(&t) {
+            t = POLITE_PREFIX_RE.replace(&t, "").to_string();
+        }
+        if MID_VERB_POLITE_RE.is_match(&t) {
+            t = MID_VERB_POLITE_RE.replace_all(&t, "$1 ").to_string();
+        }
+        if POLITE_SUFFIX_RE.is_match(&t) {
+            t = POLITE_SUFFIX_RE.replace(&t, "").to_string();
+        }
+        if t == prev {
+            break;
         }
     }
 
@@ -7390,12 +7311,23 @@ mod tests {
         assert_eq!(clean_user_input("dong cua so"), "đóng cửa sổ");
         assert_eq!(clean_user_input("m ở visual studio code"), "mở visual studio code");
         assert_eq!(clean_user_input("Má giữ tập"), "mở youtube");
+        assert_eq!(
+            clean_user_input("nhờ bạn mở giúp tôi ứng dụng spotify nhé"),
+            "mở ứng dụng spotify"
+        );
+        assert_eq!(
+            clean_user_input("bạn có thể mở cài đặt được không"),
+            "mở cài đặt"
+        );
+        assert_eq!(
+            clean_user_input("mở giúp mình quản lý tệp đi"),
+            "mở quản lý tệp"
+        );
     }
 }
 
-
 ================================================================================
-[29/43] TỆP: src/core/nlu/patterns.rs (149 dòng, 13,904 bytes)
+[27/43] TỆP: src/core/nlu/patterns.rs (149 dòng, 13,904 bytes)
 ================================================================================
 use regex::Regex;
 use std::sync::LazyLock;
@@ -7547,9 +7479,8 @@ pub static OPEN_APP_MATCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?
 pub static CLOSE_APP_MATCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(?:đóng|tắt|thoát|kill)\s+(?:ứng dụng\s+|phần mềm\s+|app\s+|trang web\s+|trang\s+|web\s+)?([a-zA-Z0-9\s_àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]+)").unwrap());
 pub static MULTI_LAUNCH_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)(?:,|\bvà\b|\bvới\b|\bvới\s+cả\b|\bcùng\s+với\b|\bcùng\b|\blẫn\b|\brồi\b|\bđồng\s+thời\b|\bvào\b)").unwrap());
 
-
 ================================================================================
-[30/43] TỆP: src/core/nlu/router.rs (684 dòng, 24,574 bytes)
+[28/43] TỆP: src/core/nlu/router.rs (729 dòng, 26,797 bytes)
 ================================================================================
 use crate::config::Config;
 use crate::core::memory::MemoryManager;
@@ -7945,7 +7876,33 @@ fn fast_path_nlu_internal(
         return (true, get_weather_info(loc));
     }
 
-    // 10. App Launcher (Ưu tiên ứng dụng cài đặt trên máy trước - ví dụ Spotify, Chrome, VS Code)
+    // 10. YouTube Search
+    if let Some(caps) = YT_SEARCH_RE1.captures(&t).or_else(|| YT_SEARCH_RE2.captures(&t)) {
+        if let Some(q) = caps.get(1) {
+            let query = q.as_str().trim();
+            if !query.is_empty() {
+                if !dry_run {
+                    return (true, open_youtube_search(query));
+                }
+                return (true, format!("Đang mở {} trên YouTube cho bạn.", query));
+            }
+        }
+    }
+
+    // 11. Google Search
+    if let Some(caps) = GOOGLE_SEARCH_RE.captures(&t) {
+        if let Some(q) = caps.get(1) {
+            let query = q.as_str().trim();
+            if !query.is_empty() && query != "thông tin" {
+                if !dry_run {
+                    return (true, open_google_search(query));
+                }
+                return (true, format!("Đang tìm kiếm {} trên Google cho bạn.", query));
+            }
+        }
+    }
+
+    // 12. App Launcher & Web Shortcuts (Ưu tiên App -> Binary -> Web URL)
     if let Some(app) = match_app(&t, app_index) {
         if !dry_run {
             launch_desktop_app(app);
@@ -7956,11 +7913,40 @@ fn fast_path_nlu_internal(
         if let Some(caps) = OPEN_APP_MATCH_RE.captures(&t) {
             if let Some(m) = caps.get(1) {
                 let target = m.as_str().trim();
-                if let Some(app) = match_app(target, app_index) {
+                let clean_target = target
+                    .trim_start_matches("trang web ")
+                    .trim_start_matches("trang ")
+                    .trim_start_matches("web ")
+                    .trim_start_matches("cái ")
+                    .trim_start_matches("ứng dụng ")
+                    .trim_start_matches("phần mềm ")
+                    .trim_start_matches("app ")
+                    .trim();
+
+                // 1) Khớp Desktop App
+                if let Some(app) = match_app(clean_target, app_index) {
                     if !dry_run {
                         launch_desktop_app(app);
                     }
                     return (true, format!("Đã mở {} cho bạn rồi nhé.", app.name));
+                }
+
+                // 2) Khớp Binary cài sẵn trong PATH
+                if let Some(bin) = try_launch_known_binary(clean_target) {
+                    return (true, format!("Đã mở {} cho bạn rồi nhé.", bin));
+                }
+
+                // 3) Khớp Web URL Shortcuts
+                if let Some(link) = GLOBAL_CONFIG.url_shortcuts.get(clean_target) {
+                    if !dry_run {
+                        open_url(link);
+                    }
+                    let name = GLOBAL_CONFIG
+                        .url_display_names
+                        .get(clean_target)
+                        .cloned()
+                        .unwrap_or_else(|| clean_target.to_string());
+                    return (true, format!("Đã mở {} cho bạn rồi nhé.", name));
                 }
             }
         }
@@ -7972,7 +7958,7 @@ fn fast_path_nlu_internal(
         }
     }
 
-    // 11. Web URL Shortcuts (Mở trang web nếu không cài app hoặc dành cho các dịch vụ web)
+    // Web URL Shortcuts dự phòng cho các tên gọi trực tiếp (vd: "facebook", "mở github")
     for (site, link) in GLOBAL_CONFIG.url_shortcuts.iter() {
         let open_phrases = [
             format!("mở {}", site),
@@ -7987,34 +7973,12 @@ fn fast_path_nlu_internal(
             if !dry_run {
                 open_url(link);
             }
-            let name = GLOBAL_CONFIG.url_display_names.get(site).cloned().unwrap_or_else(|| site.clone());
+            let name = GLOBAL_CONFIG
+                .url_display_names
+                .get(site)
+                .cloned()
+                .unwrap_or_else(|| site.clone());
             return (true, format!("Đã mở {} cho bạn rồi nhé.", name));
-        }
-    }
-
-    // 12. YouTube Search
-    if let Some(caps) = YT_SEARCH_RE1.captures(&t).or_else(|| YT_SEARCH_RE2.captures(&t)) {
-        if let Some(q) = caps.get(1) {
-            let query = q.as_str().trim();
-            if !query.is_empty() {
-                if !dry_run {
-                    return (true, open_youtube_search(query));
-                }
-                return (true, format!("Đang mở {} trên YouTube cho bạn.", query));
-            }
-        }
-    }
-
-    // 13. Google Search
-    if let Some(caps) = GOOGLE_SEARCH_RE.captures(&t) {
-        if let Some(q) = caps.get(1) {
-            let query = q.as_str().trim();
-            if !query.is_empty() && query != "thông tin" {
-                if !dry_run {
-                    return (true, open_google_search(query));
-                }
-                return (true, format!("Đang tìm kiếm {} trên Google cho bạn.", query));
-            }
         }
     }
 
@@ -8233,12 +8197,237 @@ mod tests {
         let (h3, r3) = fast_path_nlu("làm ơn mở visual studio code giúp mình nhé", &app_index, true);
         assert!(h3, "Failed 'làm ơn mở visual studio code giúp mình nhé'");
         assert!(r3.contains("Visual Studio Code") || r3.contains("code"));
+
+        let (h4, r4) = fast_path_nlu("nhờ bạn mở giúp tôi ứng dụng spotify nhé", &app_index, true);
+        assert!(h4, "Failed 'nhờ bạn mở giúp tôi ứng dụng spotify nhé'");
+        assert!(r4.to_lowercase().contains("spotify"));
+
+        let (h5, r5) = fast_path_nlu("bạn có thể mở cài đặt được không", &app_index, true);
+        assert!(h5, "Failed 'bạn có thể mở cài đặt được không'");
+        assert!(r5.to_lowercase().contains("cài đặt") || r5.to_lowercase().contains("settings") || r5.to_lowercase().contains("gnome-control-center"));
+
+        let (h6, r6) = fast_path_nlu("mở giúp mình quản lý tệp đi", &app_index, true);
+        assert!(h6, "Failed 'mở giúp mình quản lý tệp đi'");
+        assert!(r6.to_lowercase().contains("tệp") || r6.to_lowercase().contains("files") || r6.to_lowercase().contains("nautilus"));
     }
 }
 
+================================================================================
+[29/43] TỆP: src/core/state.rs (210 dòng, 6,345 bytes)
+================================================================================
+use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
+use tokio::sync::broadcast;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AssistantState {
+    Idle = 0,
+    Listening = 1,
+    Thinking = 2,
+    Speaking = 3,
+    Disabled = 4,
+}
+
+impl From<u8> for AssistantState {
+    fn from(v: u8) -> Self {
+        match v {
+            1 => AssistantState::Listening,
+            2 => AssistantState::Thinking,
+            3 => AssistantState::Speaking,
+            4 => AssistantState::Disabled,
+            _ => AssistantState::Idle,
+        }
+    }
+}
+
+impl std::fmt::Display for AssistantState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AssistantState::Idle => write!(f, "idle"),
+            AssistantState::Listening => write!(f, "listening"),
+            AssistantState::Thinking => write!(f, "thinking"),
+            AssistantState::Speaking => write!(f, "speaking"),
+            AssistantState::Disabled => write!(f, "disabled"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateEvent {
+    pub state: AssistantState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visual: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlexaUiState {
+    pub status: String,
+    pub text: String,
+    pub subtext: String,
+    pub query: String,
+    pub is_long_text: bool,
+    pub long_answer: String,
+    pub updated_at: f64,
+}
+
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn write_ui_state_atomic(state: &AlexaUiState) {
+    if let Ok(json_str) = serde_json::to_string(state) {
+        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+        let targets = [
+            std::env::var("XDG_RUNTIME_DIR")
+                .map(|d| format!("{}/alexa_state.json", d))
+                .unwrap_or_else(|_| "/tmp/alexa_state.json".to_string()),
+            "/tmp/alexa_state.json".to_string(),
+        ];
+
+        for path in targets {
+            let tmp_path = format!("{}.tmp.{}.{}", path, std::process::id(), seq);
+            if std::fs::write(&tmp_path, &json_str).is_ok() {
+                let _ = std::fs::rename(&tmp_path, &path);
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct StateManager {
+    current_state: Arc<AtomicU8>,
+    broadcaster: broadcast::Sender<StateEvent>,
+    is_interrupted: Arc<AtomicBool>,
+    manual_trigger: Arc<AtomicBool>,
+}
+
+impl StateManager {
+    pub fn new() -> Self {
+        let (tx, _) = broadcast::channel(128);
+        Self {
+            current_state: Arc::new(AtomicU8::new(AssistantState::Idle as u8)),
+            broadcaster: tx,
+            is_interrupted: Arc::new(AtomicBool::new(false)),
+            manual_trigger: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn get_state_sync(&self) -> AssistantState {
+        AssistantState::from(self.current_state.load(Ordering::SeqCst))
+    }
+
+    pub async fn get_state(&self) -> AssistantState {
+        self.get_state_sync()
+    }
+
+    pub async fn set_state_full(
+        &self,
+        new_state: AssistantState,
+        text: Option<String>,
+        query: Option<String>,
+    ) {
+        self.current_state.store(new_state as u8, Ordering::SeqCst);
+
+        let now_sec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        let t = text.clone().unwrap_or_default();
+        let q = query.unwrap_or_default();
+        let is_long = t.len() > 60;
+
+        let ui_state = AlexaUiState {
+            status: new_state.to_string(),
+            text: t.clone(),
+            subtext: String::new(),
+            query: q,
+            is_long_text: is_long,
+            long_answer: if is_long { t.clone() } else { String::new() },
+            updated_at: now_sec,
+        };
+
+        write_ui_state_atomic(&ui_state);
+
+        let event = StateEvent {
+            state: new_state,
+            text,
+            visual: None,
+        };
+        let _ = self.broadcaster.send(event);
+    }
+
+    pub async fn set_state(&self, new_state: AssistantState, text: Option<String>) {
+        self.set_state_full(new_state, text, None).await;
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<StateEvent> {
+        self.broadcaster.subscribe()
+    }
+
+    pub fn interrupt(&self) {
+        self.is_interrupted.store(true, Ordering::SeqCst);
+    }
+
+    pub fn reset_interrupt(&self) {
+        self.is_interrupted.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_interrupted(&self) -> bool {
+        self.is_interrupted.load(Ordering::SeqCst)
+    }
+
+    /// Đánh thức luồng thu âm ngay lập tức (dùng cho --trigger và --relisten)
+    pub fn trigger_listen(&self) {
+        self.manual_trigger.store(true, Ordering::SeqCst);
+        self.is_interrupted.store(true, Ordering::SeqCst);
+    }
+
+    /// Dừng mọi tác vụ đang nói / đang thu mà không mở lại mic
+    pub fn stop_all(&self) {
+        self.manual_trigger.store(false, Ordering::SeqCst);
+        self.is_interrupted.store(true, Ordering::SeqCst);
+    }
+
+    /// Kích hoạt chế độ nhập văn bản trực tiếp trên Dynamic Island Overlay
+    pub fn trigger_chat(&self) {
+        let now_sec = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64())
+            .unwrap_or(0.0);
+
+        let ui_state = AlexaUiState {
+            status: "chat".to_string(),
+            text: "Nhập câu hỏi hoặc câu lệnh của bạn...".to_string(),
+            subtext: String::new(),
+            query: String::new(),
+            is_long_text: false,
+            long_answer: String::new(),
+            updated_at: now_sec,
+        };
+
+        write_ui_state_atomic(&ui_state);
+    }
+
+    pub fn has_manual_trigger(&self) -> bool {
+        self.manual_trigger.load(Ordering::SeqCst)
+    }
+
+    pub fn take_manual_trigger(&self) -> bool {
+        self.manual_trigger.swap(false, Ordering::SeqCst)
+    }
+}
+
+impl Default for StateManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 ================================================================================
-[31/43] TỆP: src/ipc/client.rs (56 dòng, 1,651 bytes)
+[30/43] TỆP: src/ipc/client.rs (60 dòng, 1,792 bytes)
 ================================================================================
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -8252,6 +8441,8 @@ pub struct IpcCommand {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deep: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -8268,7 +8459,7 @@ pub async fn send_ipc_command<P: AsRef<Path>>(
     command: &str,
     text: Option<String>,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
-    send_ipc_command_with_options(socket_path, command, text, None).await
+    send_ipc_command_with_options(socket_path, command, text, None, None).await
 }
 
 pub async fn send_ipc_command_with_options<P: AsRef<Path>>(
@@ -8276,12 +8467,14 @@ pub async fn send_ipc_command_with_options<P: AsRef<Path>>(
     command: &str,
     text: Option<String>,
     deep: Option<bool>,
+    silent: Option<bool>,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     let mut stream = UnixStream::connect(socket_path).await?;
     let payload = IpcCommand {
         command: command.to_string(),
         text,
         deep,
+        silent,
     };
 
     let mut line = serde_json::to_string(&payload)?;
@@ -8297,9 +8490,8 @@ pub async fn send_ipc_command_with_options<P: AsRef<Path>>(
     Ok(resp)
 }
 
-
 ================================================================================
-[32/43] TỆP: src/ipc/mod.rs (5 dòng, 94 bytes)
+[31/43] TỆP: src/ipc/mod.rs (5 dòng, 94 bytes)
 ================================================================================
 pub mod client;
 pub mod server;
@@ -8307,9 +8499,8 @@ pub mod server;
 pub use client::send_ipc_command;
 pub use server::IpcServer;
 
-
 ================================================================================
-[33/43] TỆP: src/ipc/server.rs (142 dòng, 6,972 bytes)
+[32/43] TỆP: src/ipc/server.rs (153 dòng, 7,698 bytes)
 ================================================================================
 use crate::core::state::StateManager;
 use crate::ipc::client::{IpcCommand, IpcResponse};
@@ -8323,8 +8514,9 @@ pub enum ActionRequest {
     Trigger,
     Stop,
     Relisten,
-    Query { text: String, deep: bool },
+    Query { text: String, deep: bool, silent: bool },
     Speak(String),
+    Chat,
 }
 
 pub struct IpcServer {
@@ -8403,12 +8595,22 @@ impl IpcServer {
                                                 state: Some("listening".to_string()),
                                             }
                                         }
+                                        "chat" => {
+                                            state_mgr.trigger_chat();
+                                            let _ = tx.send(ActionRequest::Chat).await;
+                                            IpcResponse {
+                                                status: "ok".to_string(),
+                                                message: Some("Chat mode activated".to_string()),
+                                                state: Some("chat".to_string()),
+                                            }
+                                        }
                                         "query" => {
                                             if let Some(text) = cmd.text {
                                                 let _ = tx
                                                     .send(ActionRequest::Query {
                                                         text,
                                                         deep: cmd.deep.unwrap_or(false),
+                                                        silent: cmd.silent.unwrap_or(false),
                                                     })
                                                     .await;
                                             }
@@ -8454,6 +8656,25 @@ impl IpcServer {
     }
 }
 
+================================================================================
+[33/43] TỆP: src/lib.rs (16 dòng, 498 bytes)
+================================================================================
+pub mod config;
+pub mod core;
+pub mod ipc;
+pub mod tools;
+pub mod ai;
+pub mod speech;
+pub mod audio;
+
+pub use audio::{detect_wake_word, AudioRecorder, WakeWordType, WhisperEngine};
+pub use config::Config;
+pub use core::nlu::{clean_user_input, fast_path_nlu, strip_vietnamese_accents};
+pub use core::state::{AssistantState, StateManager};
+pub use ipc::client::send_ipc_command;
+pub use ipc::server::IpcServer;
+pub use speech::{play_chime, ChimeType, PiperTts};
+pub use tools::apps::build_app_index;
 
 ================================================================================
 [34/43] TỆP: src/speech/chime.rs (81 dòng, 2,468 bytes)
@@ -8540,7 +8761,6 @@ fn append_tone(pcm: &mut Vec<i16>, freq: f64, duration_secs: f64, sample_rate: u
     }
 }
 
-
 ================================================================================
 [35/43] TỆP: src/speech/mod.rs (7 dòng, 179 bytes)
 ================================================================================
@@ -8551,7 +8771,6 @@ pub mod tts;
 pub use chime::{play_chime, ChimeType};
 pub use sanitize::{sanitize_text_for_voice, SentenceStreamSplitter};
 pub use tts::PiperTts;
-
 
 ================================================================================
 [36/43] TỆP: src/speech/sanitize.rs (299 dòng, 10,195 bytes)
@@ -8856,7 +9075,6 @@ mod tests {
     }
 }
 
-
 ================================================================================
 [37/43] TỆP: src/speech/tts.rs (279 dòng, 9,918 bytes)
 ================================================================================
@@ -9140,9 +9358,8 @@ impl Default for PiperTts {
     }
 }
 
-
 ================================================================================
-[38/43] TỆP: src/tools/apps.rs (480 dòng, 15,588 bytes)
+[38/43] TỆP: src/tools/apps.rs (593 dòng, 19,883 bytes)
 ================================================================================
 use crate::tools::system::is_hyprland;
 use serde::{Deserialize, Serialize};
@@ -9158,6 +9375,8 @@ pub struct DesktopApp {
     pub exec: String,
     pub icon: String,
     pub desktop_file: PathBuf,
+    #[serde(default)]
+    pub name_vi: Option<String>,
 }
 
 pub type AppIndex = HashMap<String, DesktopApp>;
@@ -9185,7 +9404,16 @@ pub fn build_app_index() -> AppIndex {
             if path.extension().and_then(|ext| ext.to_str()) == Some("desktop") {
                 if let Some(app) = parse_desktop_file(path) {
                     let key = app.name.to_lowercase();
-                    index.entry(key).or_insert(app);
+                    index.entry(key).or_insert_with(|| app.clone());
+
+                    if let Some(ref vi) = app.name_vi {
+                        index.entry(vi.to_lowercase()).or_insert_with(|| app.clone());
+                    }
+
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        let stem_key = stem.to_lowercase();
+                        index.entry(stem_key).or_insert_with(|| app.clone());
+                    }
                 }
             }
         }
@@ -9198,6 +9426,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
     let content = fs::read_to_string(path).ok()?;
     let mut in_desktop_entry = false;
     let mut name = None;
+    let mut name_vi = None;
     let mut exec = None;
     let mut icon = String::new();
     let mut no_display = false;
@@ -9217,6 +9446,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
                 let v = v.trim();
                 match k {
                     "Name" if name.is_none() => name = Some(v.to_string()),
+                    "Name[vi]" => name_vi = Some(v.to_string()),
                     "Exec" if exec.is_none() => {
                         let clean_exec = v
                             .split_whitespace()
@@ -9242,6 +9472,7 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
         exec: exec?,
         icon,
         desktop_file: path.to_path_buf(),
+        name_vi,
     })
 }
 
@@ -9251,20 +9482,33 @@ pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp>
         return None;
     }
 
-    // Exact name match
+    // 1. Khớp chính xác theo key index (bao gồm name, name[vi], stem)
     if let Some(app) = index.get(&q) {
         return Some(app);
     }
 
-    // Common aliases
+    // 2. Mở rộng aliases phổ biến trên Linux & Việt hóa
     let alias_target = match q.as_str() {
         "vs code" | "vscode" | "visual studio code" | "code" => "visual studio code",
-        "terminal" | "terminal emulator" | "bàn điều khiển" => "terminal",
+        "terminal" | "terminal emulator" | "bàn điều khiển" | "dòng lệnh" | "bash" => "terminal",
         "chrome" | "google chrome" => "google chrome",
         "firefox" | "cáo lửa" => "firefox",
         "zalo" => "zalo",
-        "spotify" => "spotify",
+        "spotify" | "spotfy" => "spotify",
         "telegram" => "telegram",
+        "cài đặt" | "cấu hình" | "setting" | "settings" | "thiết lập" => "gnome-control-center",
+        "quản lý tệp" | "quản lý file" | "tệp" | "tập tin" | "file" | "files" | "thư mục" | "nautilus" => "nautilus",
+        "máy tính" | "máy tính bỏ túi" | "calculator" | "calc" => "calculator",
+        "soạn thảo" | "ghi chú" | "text editor" | "gedit" => "text editor",
+        "discord" => "discord",
+        "vlc" | "xem phim" => "vlc",
+        "obs" | "obs studio" => "obs",
+        "postman" => "postman",
+        "intellij" | "idea" => "intellij",
+        "android studio" => "android studio",
+        "obsidian" => "obsidian",
+        "steam" => "steam",
+        "brave" => "brave",
         _ => &q,
     };
 
@@ -9272,11 +9516,30 @@ pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp>
         return Some(app);
     }
 
-    // Prefix / Substring match
+    // 3. Khớp tiền tố hoặc chứa chuỗi (contains)
     for (name, app) in index.iter() {
-        if name.contains(&q) || name.contains(alias_target) {
+        if name == alias_target || name.contains(&q) || name.contains(alias_target) {
             return Some(app);
         }
+    }
+
+    // 4. Mờ nâng cao với Sorensen-Dice similarity (>= 0.78)
+    let mut best_match: Option<(&DesktopApp, f64)> = None;
+    for (name, app) in index.iter() {
+        let sim = strsim::sorensen_dice(&q, name);
+        if sim >= 0.78 {
+            if let Some((_, best_sim)) = best_match {
+                if sim > best_sim {
+                    best_match = Some((app, sim));
+                }
+            } else {
+                best_match = Some((app, sim));
+            }
+        }
+    }
+
+    if let Some((app, _)) = best_match {
+        return Some(app);
     }
 
     None
@@ -9292,15 +9555,82 @@ pub fn find_app_in_text<'a>(text: &str, index: &'a AppIndex) -> Option<&'a Deskt
     None
 }
 
+fn inject_live_env(cmd: &mut Command) {
+    if let Ok(out) = Command::new("systemctl")
+        .args(["--user", "show-environment"])
+        .output()
+    {
+        if out.status.success() {
+            let out_str = String::from_utf8_lossy(&out.stdout);
+            for line in out_str.lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    if matches!(
+                        k,
+                        "DISPLAY"
+                            | "WAYLAND_DISPLAY"
+                            | "XAUTHORITY"
+                            | "DBUS_SESSION_BUS_ADDRESS"
+                            | "XDG_RUNTIME_DIR"
+                            | "XDG_CURRENT_DESKTOP"
+                    ) {
+                        cmd.env(k, v);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn try_launch_known_binary(target: &str) -> Option<String> {
+    let t = target.trim().to_lowercase();
+    let bin_name = match t.as_str() {
+        "spotify" | "spotfy" => "spotify",
+        "chrome" | "google chrome" => "google-chrome",
+        "firefox" => "firefox",
+        "code" | "vscode" | "vs code" => "code",
+        "cài đặt" | "settings" | "gnome-control-center" => "gnome-control-center",
+        "quản lý tệp" | "tệp" | "files" | "nautilus" => "nautilus",
+        "terminal" | "gnome-terminal" => "gnome-terminal",
+        "calculator" | "máy tính" => "gnome-calculator",
+        "text editor" | "gedit" => "gedit",
+        "discord" => "discord",
+        "vlc" => "vlc",
+        "obs" => "obs",
+        "postman" => "postman",
+        "steam" => "steam",
+        "brave" => "brave-browser",
+        _ => return None,
+    };
+
+    let check = Command::new("which").arg(bin_name).output().ok()?;
+    if !check.status.success() {
+        return None;
+    }
+
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(format!("nohup {} >/dev/null 2>&1 &", bin_name))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    inject_live_env(&mut cmd);
+
+    if cmd.spawn().is_ok() {
+        Some(bin_name.to_string())
+    } else {
+        None
+    }
+}
+
 pub fn launch_desktop_app(app: &DesktopApp) -> bool {
     // 1. Thử khởi chạy chuẩn Desktop thông qua gtk-launch
     if let Some(fname) = app.desktop_file.file_name() {
-        if let Ok(mut child) = Command::new("gtk-launch")
-            .arg(fname)
+        let mut cmd = Command::new("gtk-launch");
+        cmd.arg(fname)
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+            .stderr(Stdio::null());
+        inject_live_env(&mut cmd);
+
+        if let Ok(mut child) = cmd.spawn() {
             std::thread::sleep(std::time::Duration::from_millis(60));
             match child.try_wait() {
                 Ok(Some(status)) if status.success() => return true,
@@ -9311,13 +9641,13 @@ pub fn launch_desktop_app(app: &DesktopApp) -> bool {
     }
 
     // 2. Fallback: Chạy trực tiếp binary từ trường Exec trong .desktop file
-    Command::new("sh")
-        .arg("-c")
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(format!("nohup {} >/dev/null 2>&1 &", app.exec))
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .is_ok()
+        .stderr(Stdio::null());
+    inject_live_env(&mut cmd);
+    cmd.spawn().is_ok()
 }
 
 /// Helper chạy ydotool (cần ydotoold) hoặc xdotool (trên X11)
@@ -9625,7 +9955,6 @@ pub fn apply_workspace_preset(preset: &str, index: &AppIndex, dry_run: bool) -> 
     }
 }
 
-
 ================================================================================
 [39/43] TỆP: src/tools/dev.rs (81 dòng, 2,921 bytes)
 ================================================================================
@@ -9711,7 +10040,6 @@ pub fn get_git_status_summary() -> String {
     }
 }
 
-
 ================================================================================
 [40/43] TỆP: src/tools/mod.rs (5 dòng, 71 bytes)
 ================================================================================
@@ -9720,7 +10048,6 @@ pub mod apps;
 pub mod dev;
 pub mod web;
 pub mod timer;
-
 
 ================================================================================
 [41/43] TỆP: src/tools/system.rs (384 dòng, 13,012 bytes)
@@ -10110,7 +10437,6 @@ pub fn get_current_media_track() -> String {
     "Hiện tại máy không có bài hát nào đang phát qua trình đa phương tiện.".to_string()
 }
 
-
 ================================================================================
 [42/43] TỆP: src/tools/timer.rs (205 dòng, 6,838 bytes)
 ================================================================================
@@ -10320,7 +10646,6 @@ mod tests {
     }
 }
 
-
 ================================================================================
 [43/43] TỆP: src/tools/web.rs (59 dòng, 1,957 bytes)
 ================================================================================
@@ -10383,5 +10708,4 @@ mod urlencoding {
         escaped
     }
 }
-
 

@@ -10,6 +10,8 @@ pub struct IpcCommand {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deep: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -26,7 +28,7 @@ pub async fn send_ipc_command<P: AsRef<Path>>(
     command: &str,
     text: Option<String>,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
-    send_ipc_command_with_options(socket_path, command, text, None).await
+    send_ipc_command_with_options(socket_path, command, text, None, None).await
 }
 
 pub async fn send_ipc_command_with_options<P: AsRef<Path>>(
@@ -34,12 +36,14 @@ pub async fn send_ipc_command_with_options<P: AsRef<Path>>(
     command: &str,
     text: Option<String>,
     deep: Option<bool>,
+    silent: Option<bool>,
 ) -> Result<IpcResponse, Box<dyn std::error::Error>> {
     let mut stream = UnixStream::connect(socket_path).await?;
     let payload = IpcCommand {
         command: command.to_string(),
         text,
         deep,
+        silent,
     };
 
     let mut line = serde_json::to_string(&payload)?;

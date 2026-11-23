@@ -1,5 +1,36 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
+
+fn load_live_user_env() -> HashMap<String, String> {
+    let mut env = HashMap::new();
+    if let Ok(out) = Command::new("systemctl")
+        .args(["--user", "show-environment"])
+        .output()
+    {
+        if out.status.success() {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                if let Some((k, v)) = line.split_once('=') {
+                    env.insert(k.to_string(), v.to_string());
+                }
+            }
+        }
+    }
+    env
+}
+
+fn find_xwayland_auth(runtime_dir: &str) -> Option<String> {
+    if let Ok(entries) = std::fs::read_dir(runtime_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let s = name.to_string_lossy();
+            if s.starts_with(".mutter-Xwaylandauth.") {
+                return Some(entry.path().to_string_lossy().to_string());
+            }
+        }
+    }
+    None
+}
 
 pub fn ensure_overlay_running() {
     let qml_check = Command::new("pgrep")
@@ -9,6 +40,51 @@ pub fn ensure_overlay_running() {
         if out.status.success() {
             return;
         }
+    }
+
+    let live_env = load_live_user_env();
+    let runtime_dir = live_env
+        .get("XDG_RUNTIME_DIR")
+        .cloned()
+        .or_else(|| std::env::var("XDG_RUNTIME_DIR").ok())
+        .unwrap_or_else(|| "/run/user/1000".to_string());
+
+    let display = live_env
+        .get("DISPLAY")
+        .cloned()
+        .or_else(|| std::env::var("DISPLAY").ok());
+    let wayland = live_env
+        .get("WAYLAND_DISPLAY")
+        .cloned()
+        .or_else(|| std::env::var("WAYLAND_DISPLAY").ok());
+
+    // Chưa vào phiên đồ họa hoàn chỉnh (mới boot) -> bỏ qua để vòng lặp 5s thử lại
+    if display.is_none() && wayland.is_none() {
+        return;
+    }
+
+    let is_gnome = live_env
+        .get("XDG_CURRENT_DESKTOP")
+        .cloned()
+        .or_else(|| std::env::var("XDG_CURRENT_DESKTOP").ok())
+        .unwrap_or_default()
+        .to_lowercase()
+        .contains("gnome")
+        || Command::new("pgrep")
+            .args(["-x", "gnome-shell"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+    let xauth = live_env
+        .get("XAUTHORITY")
+        .cloned()
+        .or_else(|| std::env::var("XAUTHORITY").ok())
+        .or_else(|| find_xwayland_auth(&runtime_dir));
+
+    // Trên GNOME cần chạy XCB (XWayland) -> đợi đến khi DISPLAY sẵn sàng
+    if is_gnome && display.is_none() {
+        return;
     }
 
     let home = dirs::home_dir().unwrap_or_default();
@@ -31,16 +107,22 @@ pub fn ensure_overlay_running() {
     if let (Some(qs), Some(qml_path)) = (qs_bin, qml_candidates.iter().find(|p| p.exists())) {
         let mut cmd = Command::new(qs);
         cmd.args(["-p", qml_path.to_str().unwrap_or_default()]);
+        cmd.env("XDG_RUNTIME_DIR", &runtime_dir);
 
-        let is_gnome = std::env::var("XDG_CURRENT_DESKTOP")
-            .unwrap_or_default()
-            .to_lowercase()
-            .contains("gnome");
+        if let Some(ref d) = display {
+            cmd.env("DISPLAY", d);
+        }
+        if let Some(ref w) = wayland {
+            cmd.env("WAYLAND_DISPLAY", w);
+        }
+        if let Some(ref xa) = xauth {
+            cmd.env("XAUTHORITY", xa);
+        }
+        if let Some(dbus) = live_env.get("DBUS_SESSION_BUS_ADDRESS") {
+            cmd.env("DBUS_SESSION_BUS_ADDRESS", dbus);
+        }
         if is_gnome {
             cmd.env("QT_QPA_PLATFORM", "xcb");
-        }
-        if std::env::var("DISPLAY").is_err() {
-            cmd.env("DISPLAY", ":0");
         }
 
         match cmd
@@ -48,11 +130,15 @@ pub fn ensure_overlay_running() {
             .stderr(std::process::Stdio::null())
             .spawn()
         {
-            Ok(_) => {
+            Ok(mut child) => {
                 println!(
-                    "🖥️ Đã khởi chạy giao diện Quickshell Dynamic Island Overlay: {:?}",
-                    qml_path
+                    "🖥️ Đã khởi chạy Quickshell Overlay (display={:?}, gnome={}): {:?}",
+                    display, is_gnome, qml_path
                 );
+                // Thu dọn tiến trình nếu qs thoát sớm để tránh sinh zombie
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
                 return;
             }
             Err(e) => eprintln!("⚠️ Lỗi khởi chạy Quickshell overlay: {}", e),

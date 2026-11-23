@@ -60,15 +60,23 @@ ShellRoot {
             let st = data.status || "idle";
 
             // Watchdog: Nếu status là "speaking" hoặc "thinking" nhưng không có cập nhật mới
-            // trong khoảng thời gian hợp lý (tiến trình python dừng đột ngột, crash, hoặc test hoàn tất)
+            // trong khoảng thời gian hợp lý (tiến trình dừng đột ngột, crash, hoặc test hoàn tất)
             let updated = data.updated_at || 0;
             let nowSec = Date.now() / 1000.0;
-            if (updated > 0 && st !== "idle") {
+            if (updated > 0 && st !== "idle" && st !== "chat") {
                 let textLen = (data.text || "").length;
-                let maxDuration = (st === "thinking") ? 90.0 : Math.max(8.0, Math.min(60.0, textLen / 10.0 + 5.0));
+                let maxDuration = (st === "thinking") ? 90.0 : Math.max(20.0, Math.min(300.0, textLen / 8.0 + 15.0));
                 if (nowSec - updated > maxDuration) {
                     st = "idle";
                 }
+            }
+
+            if (st === "chat") {
+                root.isVisible = true;
+                root.isTextMode = true;
+                root.userIsTyping = true;
+                autoCollapseTimer.stop();
+                hideTimer.stop();
             }
 
             let prevStatus = root.currentStatus;
@@ -250,7 +258,7 @@ ShellRoot {
             cmdRunner.running = true;
             showToast("🔇 Đã dừng đọc");
         } else {
-            let toSpeak = root.longAnswerText.substring(0, 1200);
+            let toSpeak = root.longAnswerText.substring(0, 8000);
             cmdRunner.commandList = [root.assistantBin, "--speak", toSpeak];
             cmdRunner.running = true;
             showToast("🔊 Đang đọc phản hồi...");
@@ -302,6 +310,8 @@ ShellRoot {
         screen: Quickshell.screens[0]
         visible: root.isVisible || mainContent.opacity > 0.01
         exclusionMode: ExclusionMode.Ignore
+        focusable: root.isTextMode
+        WlrLayershell.keyboardFocus: root.isTextMode ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
 
         anchors {
             bottom: true
@@ -420,6 +430,18 @@ ShellRoot {
                                 Layout.fillWidth: true
                                 Layout.alignment: Qt.AlignVCenter
                                 spacing: 6
+
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        root.isTextMode = true;
+                                        if (root.queryText.length > 0) {
+                                            textInput.text = root.queryText;
+                                        }
+                                        textInput.forceActiveFocus();
+                                    }
+                                }
 
                                 Text {
                                     text: "✎"

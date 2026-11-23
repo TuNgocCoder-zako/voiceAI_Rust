@@ -297,25 +297,25 @@ impl ModelRouter {
         match role {
             TaskRole::Reasoning => ChatOptions {
                 temperature: Some(0.6),
-                num_predict: Some(if is_thinking { 1200 } else { 450 }),
+                num_predict: Some(if is_thinking { 2048 } else { 1024 }),
                 num_ctx: Some(2048),
                 top_p: Some(0.95),
             },
             TaskRole::Coder => ChatOptions {
                 temperature: Some(0.2), // Nhiệt độ thấp cho kết quả chính xác, chuẩn cú pháp
-                num_predict: Some(800),
+                num_predict: Some(1200),
                 num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
             TaskRole::Fast => ChatOptions {
                 temperature: Some(0.3),
-                num_predict: Some(120), // Ngắn gọn để đọc TTS tự nhiên trong vài giây
+                num_predict: Some(512), // Đủ dài cho câu trả lời tự nhiên và đầy đủ ý
                 num_ctx: Some(2048),
                 top_p: Some(0.9),
             },
             TaskRole::General => ChatOptions {
                 temperature: Some(0.4),
-                num_predict: Some(200),
+                num_predict: Some(768),
                 num_ctx: Some(2048),
                 top_p: Some(0.9),
             },

@@ -53,6 +53,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return Ok(());
     }
+    if args.chat {
+        match send_ipc_command(&config.socket_path, "chat", None).await {
+            Ok(resp) => println!("💬 Đã gửi lệnh mở Chat Mode: {:?}", resp.message),
+            Err(e) => eprintln!("⚠️ Lỗi gửi chat: {}", e),
+        }
+        return Ok(());
+    }
 
     // 2. Nhóm công cụ chẩn đoán & đo hiệu năng
     if args.benchmark {
@@ -88,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "query",
                 Some(q.clone()),
                 Some(args.deep),
+                Some(args.silent),
             )
             .await
             .is_ok()
@@ -105,13 +113,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         if handled {
             println!("🤖 [Fast-Path]: {}", reply);
-            if args.voice && ctx.tts.is_available() {
+            if args.voice && !args.silent && ctx.tts.is_available() {
                 let tts_c = ctx.tts.clone();
                 let rep_c = reply.clone();
                 let _ = tokio::task::spawn_blocking(move || tts_c.speak(&rep_c, None)).await;
             }
         } else {
-            pipeline::execute_llm_query(&ctx, &q, args.deep, false, args.voice).await;
+            pipeline::execute_llm_query(&ctx, &q, args.deep, false, args.voice && !args.silent).await;
         }
         return Ok(());
     }

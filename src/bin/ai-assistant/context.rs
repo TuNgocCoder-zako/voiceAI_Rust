@@ -56,6 +56,12 @@ pub struct Args {
 
     #[arg(long, help = "Hiển thị trực tiếp điểm Silero VAD & openWakeWord theo thời gian thực")]
     pub debug_audio: bool,
+
+    #[arg(long, help = "Mở giao diện gõ văn bản trực tiếp (Text Mode / Chat) trên Overlay")]
+    pub chat: bool,
+
+    #[arg(long, help = "Chế độ yên lặng khi truy vấn --query (không phát âm TTS)")]
+    pub silent: bool,
 }
 
 #[derive(Clone)]

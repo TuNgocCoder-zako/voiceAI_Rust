@@ -10,8 +10,9 @@ pub enum ActionRequest {
     Trigger,
     Stop,
     Relisten,
-    Query { text: String, deep: bool },
+    Query { text: String, deep: bool, silent: bool },
     Speak(String),
+    Chat,
 }
 
 pub struct IpcServer {
@@ -90,12 +91,22 @@ impl IpcServer {
                                                 state: Some("listening".to_string()),
                                             }
                                         }
+                                        "chat" => {
+                                            state_mgr.trigger_chat();
+                                            let _ = tx.send(ActionRequest::Chat).await;
+                                            IpcResponse {
+                                                status: "ok".to_string(),
+                                                message: Some("Chat mode activated".to_string()),
+                                                state: Some("chat".to_string()),
+                                            }
+                                        }
                                         "query" => {
                                             if let Some(text) = cmd.text {
                                                 let _ = tx
                                                     .send(ActionRequest::Query {
                                                         text,
                                                         deep: cmd.deep.unwrap_or(false),
+                                                        silent: cmd.silent.unwrap_or(false),
                                                     })
                                                     .await;
                                             }

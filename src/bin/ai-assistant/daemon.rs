@@ -103,7 +103,11 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
                     }
                 });
             }
-            ActionRequest::Query { text, deep } => {
+            ActionRequest::Chat => {
+                println!("💬 Nhận sự kiện Chat: Bật giao diện nhập văn bản...");
+                ctx.state_manager.trigger_chat();
+            }
+            ActionRequest::Query { text, deep, silent } => {
                 if ctx.tts.is_speaking() || ctx.state_manager.get_state_sync() != AssistantState::Idle {
                     ctx.state_manager.stop_all();
                     tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
@@ -142,7 +146,7 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
                             )
                             .await;
 
-                        if act_ctx.tts.is_available() && !rep.is_empty() {
+                        if !silent && act_ctx.tts.is_available() && !rep.is_empty() {
                             let tts_bg = act_ctx.tts.clone();
                             let mgr_bg = act_ctx.state_manager.clone();
                             let rep_bg = rep.clone();
@@ -160,7 +164,7 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
                             &text,
                             deep,
                             true,
-                            true,
+                            !silent,
                         )
                         .await;
                     }
