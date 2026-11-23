@@ -58,6 +58,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(resp) => println!("💬 Đã gửi lệnh mở Chat Mode: {:?}", resp.message),
             Err(e) => eprintln!("⚠️ Lỗi gửi chat: {}", e),
         }
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+        platform::focus_overlay_window();
+        return Ok(());
+    }
+    if args.focus {
+        platform::focus_overlay_window();
         return Ok(());
     }
 

@@ -106,9 +106,13 @@ pub async fn run_daemon(ctx: AppContext) -> Result<(), Box<dyn std::error::Error
             ActionRequest::Chat => {
                 println!("💬 Nhận sự kiện Chat: Bật giao diện nhập văn bản...");
                 ctx.state_manager.trigger_chat();
+                tokio::spawn(async {
+                    tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+                    crate::platform::focus_overlay_window();
+                });
                 let mgr = ctx.state_manager.clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(tokio::time::Duration::from_millis(1500)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(5000)).await;
                     if mgr.get_state_sync() == AssistantState::Idle {
                         mgr.reset_chat_to_idle();
                     }

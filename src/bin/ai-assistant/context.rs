@@ -60,6 +60,9 @@ pub struct Args {
     #[arg(long, help = "Mở giao diện gõ văn bản trực tiếp (Text Mode / Chat) trên Overlay")]
     pub chat: bool,
 
+    #[arg(long, help = "Chuyển tiêu điểm bàn phím X11 tới cửa sổ Overlay")]
+    pub focus: bool,
+
     #[arg(long, help = "Chế độ yên lặng khi truy vấn --query (không phát âm TTS)")]
     pub silent: bool,
 }

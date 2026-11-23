@@ -237,3 +237,130 @@ pub fn ensure_mic_levels() {
         .args(["set-mute", "@DEFAULT_AUDIO_SOURCE@", "0"])
         .output();
 }
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct XClientMessageEvent {
+    r#type: libc::c_int,
+    serial: libc::c_ulong,
+    send_event: libc::c_int,
+    display: *mut libc::c_void,
+    window: libc::c_ulong,
+    message_type: libc::c_ulong,
+    format: libc::c_int,
+    l: [libc::c_long; 5],
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+union XEvent {
+    r#type: libc::c_int,
+    xclient: XClientMessageEvent,
+    pad: [libc::c_long; 24],
+}
+
+pub fn focus_overlay_window() -> bool {
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/run/user/1000".to_string());
+    let xauth = std::env::var("XAUTHORITY").ok().or_else(|| find_xwayland_auth(&runtime_dir));
+
+    let mut wid = None;
+    for _ in 0..12 {
+        let mut cmd = Command::new("xwininfo");
+        cmd.args(["-root", "-tree"]);
+        if let Some(ref a) = xauth {
+            cmd.env("XAUTHORITY", a);
+        }
+        if let Ok(out) = cmd.output() {
+            if out.status.success() {
+                let text = String::from_utf8_lossy(&out.stdout);
+                for line in text.lines() {
+                    if line.contains("quickshell") && !line.contains(" 1x1") && !line.contains(" 3x3") {
+                        if let Some(tok) = line.split_whitespace().next() {
+                            if tok.starts_with("0x") {
+                                if let Ok(val) = u64::from_str_radix(tok.trim_start_matches("0x"), 16) {
+                                    wid = Some(val);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(w) = wid {
+            let mut info_cmd = Command::new("xwininfo");
+            info_cmd.args(["-id", &format!("0x{:x}", w)]);
+            if let Some(ref a) = xauth {
+                info_cmd.env("XAUTHORITY", a);
+            }
+            if let Ok(info_out) = info_cmd.output() {
+                let info_text = String::from_utf8_lossy(&info_out.stdout);
+                if info_text.contains("IsViewable") {
+                    break;
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(35));
+    }
+
+    let target_wid = match wid {
+        Some(w) => w,
+        None => return false,
+    };
+
+    unsafe {
+        let x11_lib = libc::dlopen(b"libX11.so.6\0".as_ptr() as *const _, libc::RTLD_LAZY);
+        if x11_lib.is_null() {
+            return false;
+        }
+
+        type XOpenDisplayFn = unsafe extern "C" fn(*const libc::c_char) -> *mut libc::c_void;
+        type XSetInputFocusFn = unsafe extern "C" fn(*mut libc::c_void, libc::c_ulong, libc::c_int, libc::c_ulong) -> libc::c_int;
+        type XDefaultRootWindowFn = unsafe extern "C" fn(*mut libc::c_void) -> libc::c_ulong;
+        type XInternAtomFn = unsafe extern "C" fn(*mut libc::c_void, *const libc::c_char, libc::c_int) -> libc::c_ulong;
+        type XSendEventFn = unsafe extern "C" fn(*mut libc::c_void, libc::c_ulong, libc::c_int, libc::c_long, *mut XEvent) -> libc::c_int;
+        type XFlushFn = unsafe extern "C" fn(*mut libc::c_void) -> libc::c_int;
+        type XCloseDisplayFn = unsafe extern "C" fn(*mut libc::c_void) -> libc::c_int;
+
+        let open_display: XOpenDisplayFn = std::mem::transmute(libc::dlsym(x11_lib, b"XOpenDisplay\0".as_ptr() as *const _));
+        let set_input_focus: XSetInputFocusFn = std::mem::transmute(libc::dlsym(x11_lib, b"XSetInputFocus\0".as_ptr() as *const _));
+        let default_root_window: XDefaultRootWindowFn = std::mem::transmute(libc::dlsym(x11_lib, b"XDefaultRootWindow\0".as_ptr() as *const _));
+        let intern_atom: XInternAtomFn = std::mem::transmute(libc::dlsym(x11_lib, b"XInternAtom\0".as_ptr() as *const _));
+        let send_event: XSendEventFn = std::mem::transmute(libc::dlsym(x11_lib, b"XSendEvent\0".as_ptr() as *const _));
+        let flush: XFlushFn = std::mem::transmute(libc::dlsym(x11_lib, b"XFlush\0".as_ptr() as *const _));
+        let close_display: XCloseDisplayFn = std::mem::transmute(libc::dlsym(x11_lib, b"XCloseDisplay\0".as_ptr() as *const _));
+
+        let display = open_display(std::ptr::null());
+        if display.is_null() {
+            libc::dlclose(x11_lib);
+            return false;
+        }
+
+        let root = default_root_window(display);
+        let net_active = intern_atom(display, b"_NET_ACTIVE_WINDOW\0".as_ptr() as *const _, 0);
+
+        // 1. Gửi ClientMessage _NET_ACTIVE_WINDOW tới Window Manager
+        let mut ev: XEvent = std::mem::zeroed();
+        ev.r#type = 33; // ClientMessage
+        ev.xclient.serial = 0;
+        ev.xclient.send_event = 1;
+        ev.xclient.display = display;
+        ev.xclient.window = target_wid as libc::c_ulong;
+        ev.xclient.message_type = net_active;
+        ev.xclient.format = 32;
+        ev.xclient.l[0] = 2; // Source = 2 (Pager / Taskbar bypass focus stealing prevention)
+        ev.xclient.l[1] = 0; // CurrentTime
+
+        let mask = (1 << 19) | (1 << 20); // SubstructureNotifyMask | SubstructureRedirectMask
+        let _ = send_event(display, root, 0, mask, &mut ev);
+
+        // 2. Ép trực tiếp XSetInputFocus cho cửa sổ Quickshell
+        // 2 = RevertToParent, 0 = CurrentTime
+        let _ = set_input_focus(display, target_wid as libc::c_ulong, 2, 0);
+
+        flush(display);
+        close_display(display);
+        libc::dlclose(x11_lib);
+        true
+    }
+}

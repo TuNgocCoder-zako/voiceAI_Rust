@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
-import Quickshell.Wayland
 import Quickshell.Io
 
 ShellRoot {
@@ -30,6 +29,7 @@ ShellRoot {
     onIsTextModeChanged: {
         if (root.isTextMode) {
             textInput.forceActiveFocus();
+            root.requestWindowFocus();
         } else {
             root.userIsTyping = false;
         }
@@ -239,6 +239,18 @@ ShellRoot {
     }
 
     Process {
+        id: focusRunner
+        property var commandList: []
+        command: commandList
+    }
+
+    function requestWindowFocus() {
+        if (focusRunner.running) focusRunner.running = false;
+        focusRunner.commandList = [root.assistantBin, "--focus"];
+        focusRunner.running = true;
+    }
+
+    Process {
         id: cmdRunner
         property var commandList: []
         command: commandList
@@ -319,8 +331,7 @@ ShellRoot {
         screen: Quickshell.screens[0]
         visible: root.isVisible || mainContent.opacity > 0.01
         exclusionMode: ExclusionMode.Ignore
-        focusable: root.isTextMode
-        WlrLayershell.keyboardFocus: root.isTextMode ? WlrKeyboardFocus.OnDemand : WlrKeyboardFocus.None
+        focusable: true
 
         anchors {
             bottom: true
@@ -1123,6 +1134,7 @@ ShellRoot {
                                     onClicked: {
                                         root.isTextMode = true;
                                         textInput.forceActiveFocus();
+                                        root.requestWindowFocus();
                                     }
                                 }
                             }
@@ -1164,6 +1176,17 @@ ShellRoot {
                                     selectionColor: "#3b82f6"
                                     cursorVisible: true
                                     focus: root.isTextMode
+                                    activeFocusOnPress: true
+
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.IBeamCursor
+                                        onPressed: (mouse) => {
+                                            textInput.forceActiveFocus();
+                                            root.requestWindowFocus();
+                                            mouse.accepted = false;
+                                        }
+                                    }
 
                                     Text {
                                         anchors.fill: parent
