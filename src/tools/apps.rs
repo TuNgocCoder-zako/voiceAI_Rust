@@ -113,10 +113,104 @@ fn parse_desktop_file(path: &Path) -> Option<DesktopApp> {
     })
 }
 
+pub fn is_browser_query(q: &str) -> bool {
+    let clean = q
+        .trim()
+        .trim_start_matches("ứng dụng ")
+        .trim_start_matches("phần mềm ")
+        .trim_start_matches("app ")
+        .trim();
+    matches!(
+        clean,
+        "trình duyệt"
+            | "trình duyệt web"
+            | "trình duật"
+            | "trình duyet"
+            | "trình dượt"
+            | "trình duột"
+            | "trình lướt web"
+            | "browser"
+            | "web browser"
+            | "webbrowser"
+            | "web"
+            | "internet"
+            | "duyệt web"
+            | "lướt web"
+            | "lên mạng"
+            | "vào mạng"
+    )
+}
+
+pub fn find_installed_browser<'a>(index: &'a AppIndex) -> Option<&'a DesktopApp> {
+    // 1. Tra cứu trình duyệt mặc định hệ thống từ xdg-settings
+    if let Ok(out) = Command::new("xdg-settings")
+        .args(["get", "default-web-browser"])
+        .output()
+    {
+        if out.status.success() {
+            let default_name = String::from_utf8_lossy(&out.stdout).trim().to_lowercase();
+            let stem = default_name.trim_end_matches(".desktop");
+            if let Some(app) = index.get(stem) {
+                return Some(app);
+            }
+            if let Some((first, _)) = stem.split_once('_') {
+                if let Some(app) = index.get(first) {
+                    return Some(app);
+                }
+            }
+            if let Some((first, _)) = stem.split_once('-') {
+                if let Some(app) = index.get(first) {
+                    return Some(app);
+                }
+            }
+        }
+    }
+
+    // 2. Danh sách ưu tiên các trình duyệt phổ biến
+    let browser_candidates = [
+        "firefox",
+        "firefox_firefox",
+        "google chrome",
+        "google-chrome",
+        "chrome",
+        "brave",
+        "brave-browser",
+        "microsoft-edge",
+        "edge",
+        "chromium",
+        "chromium-browser",
+        "opera",
+        "cốc cốc",
+    ];
+
+    for key in browser_candidates {
+        if let Some(app) = index.get(key) {
+            return Some(app);
+        }
+    }
+
+    // 3. Quét trong index app nào có Exec hoặc tên chứa browser/firefox/chrome
+    for (name, app) in index.iter() {
+        let n = name.to_lowercase();
+        if n.contains("firefox") || n.contains("chrome") || n.contains("browser") {
+            return Some(app);
+        }
+    }
+
+    None
+}
+
 pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return None;
+    }
+
+    // 0. Nhận diện truy vấn mở trình duyệt web chung
+    if is_browser_query(&q) {
+        if let Some(browser) = find_installed_browser(index) {
+            return Some(browser);
+        }
     }
 
     // 1. Khớp chính xác theo key index (bao gồm name, name[vi], stem)
@@ -127,7 +221,7 @@ pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp>
     // 2. Mở rộng aliases phổ biến trên Linux & Việt hóa
     let alias_target = match q.as_str() {
         "vs code" | "vscode" | "visual studio code" | "code" => "visual studio code",
-        "terminal" | "terminal emulator" | "bàn điều khiển" | "dòng lệnh" | "bash" => "terminal",
+        "terminal" | "terminal emulator" | "bàn điều khiển" | "dòng lệnh" | "bash" | "ptyxis" => "terminal",
         "chrome" | "google chrome" => "google chrome",
         "firefox" | "cáo lửa" => "firefox",
         "zalo" => "zalo",
@@ -136,16 +230,22 @@ pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp>
         "cài đặt" | "cấu hình" | "setting" | "settings" | "thiết lập" => "gnome-control-center",
         "quản lý tệp" | "quản lý file" | "tệp" | "tập tin" | "file" | "files" | "thư mục" | "nautilus" => "nautilus",
         "máy tính" | "máy tính bỏ túi" | "calculator" | "calc" => "calculator",
-        "soạn thảo" | "ghi chú" | "text editor" | "gedit" => "text editor",
+        "soạn thảo" | "ghi chú" | "text editor" | "gedit" | "gnome-text-editor" => "text editor",
         "discord" => "discord",
         "vlc" | "xem phim" => "vlc",
         "obs" | "obs studio" => "obs",
         "postman" => "postman",
-        "intellij" | "idea" => "intellij",
+        "intellij" | "idea" | "intellij idea" => "intellij",
         "android studio" => "android studio",
         "obsidian" => "obsidian",
         "steam" => "steam",
         "brave" => "brave",
+        "dbeaver" | "dbeaver-ce" | "cơ sở dữ liệu" | "database" => "dbeaver-ce",
+        "onlyoffice" | "office" | "word" | "excel" | "văn phòng" => "onlyoffice",
+        "lm studio" | "lmstudio" => "lm studio",
+        "aula" | "bàn phím aula" | "f75" | "aula f75" => "aula studio",
+        "antigravity" => "antigravity",
+        "kitty" => "kitty",
         _ => &q,
     };
 
@@ -177,6 +277,17 @@ pub fn match_app<'a>(query: &str, index: &'a AppIndex) -> Option<&'a DesktopApp>
 
     if let Some((app, _)) = best_match {
         return Some(app);
+    }
+
+    // 5. Fallback trình duyệt: nếu người dùng gọi tên trình duyệt cụ thể mà máy chưa cài
+    // (như Chrome, Brave, Edge, Cốc Cốc) -> mở ngay trình duyệt mặc định hiện có
+    if matches!(
+        q.as_str(),
+        "chrome" | "google chrome" | "brave" | "edge" | "microsoft edge" | "cốc cốc" | "coc coc" | "opera"
+    ) {
+        if let Some(browser) = find_installed_browser(index) {
+            return Some(browser);
+        }
     }
 
     None
@@ -220,42 +331,72 @@ fn inject_live_env(cmd: &mut Command) {
 
 pub fn try_launch_known_binary(target: &str) -> Option<String> {
     let t = target.trim().to_lowercase();
-    let bin_name = match t.as_str() {
-        "spotify" | "spotfy" => "spotify",
-        "chrome" | "google chrome" => "google-chrome",
-        "firefox" => "firefox",
-        "code" | "vscode" | "vs code" => "code",
-        "cài đặt" | "settings" | "gnome-control-center" => "gnome-control-center",
-        "quản lý tệp" | "tệp" | "files" | "nautilus" => "nautilus",
-        "terminal" | "gnome-terminal" => "gnome-terminal",
-        "calculator" | "máy tính" => "gnome-calculator",
-        "text editor" | "gedit" => "gedit",
-        "discord" => "discord",
-        "vlc" => "vlc",
-        "obs" => "obs",
-        "postman" => "postman",
-        "steam" => "steam",
-        "brave" => "brave-browser",
+    let candidates: &[&str] = match t.as_str() {
+        "trình duyệt" | "trình duyệt web" | "trình duật" | "trình duyet" | "trình dượt" | "browser" | "web" | "web browser" => {
+            &["firefox", "x-www-browser", "google-chrome", "brave-browser", "chromium"]
+        }
+        "firefox" | "cáo lửa" => &["firefox", "x-www-browser"],
+        "chrome" | "google chrome" => &["google-chrome", "google-chrome-stable", "chromium", "firefox", "x-www-browser"],
+        "brave" => &["brave-browser", "brave", "firefox", "x-www-browser"],
+        "edge" | "microsoft edge" => &["microsoft-edge", "microsoft-edge-stable", "firefox", "x-www-browser"],
+        "cốc cốc" | "coc coc" => &["coccoc", "coccoc-browser", "firefox", "x-www-browser"],
+        "spotify" | "spotfy" => &["spotify"],
+        "code" | "vscode" | "vs code" | "visual studio code" => &["code"],
+        "terminal" | "terminal emulator" | "bàn điều khiển" | "dòng lệnh" | "bash" => {
+            &["ptyxis", "gnome-terminal", "kitty", "xterm"]
+        }
+        "cài đặt" | "cấu hình" | "settings" | "gnome-control-center" => &["gnome-control-center"],
+        "quản lý tệp" | "quản lý file" | "tệp" | "files" | "nautilus" => &["nautilus"],
+        "calculator" | "máy tính" | "máy tính bỏ túi" => &["gnome-calculator", "kcalc"],
+        "text editor" | "soạn thảo" | "ghi chú" | "gedit" => &["gnome-text-editor", "gedit", "kate"],
+        "dbeaver" | "dbeaver-ce" | "cơ sở dữ liệu" => &["dbeaver", "/usr/share/dbeaver-ce/dbeaver"],
+        "onlyoffice" | "office" | "word" | "excel" => &[
+            "/snap/bin/onlyoffice-desktopeditors",
+            "onlyoffice-desktopeditors",
+            "libreoffice",
+        ],
+        "lm studio" | "lmstudio" => &[
+            "/home/ngoctu/Applications/LM-Studio.AppImage",
+            "lmstudio",
+        ],
+        "aula" | "aula studio" | "bàn phím aula" | "f75" => &["aula-studio", "/usr/local/bin/f75"],
+        "postman" => &["/opt/postman/Postman", "postman"],
+        "intellij" | "idea" => &["/opt/intellij-idea-ultimate/bin/idea.sh", "idea"],
+        "android studio" => &["/opt/android-studio/bin/studio.sh", "studio"],
+        "antigravity" => &["/opt/antigravity/antigravity", "antigravity"],
+        "discord" => &["discord"],
+        "vlc" | "xem phim" => &["vlc"],
+        "obs" | "obs studio" => &["obs"],
+        "steam" => &["steam"],
         _ => return None,
     };
 
-    let check = Command::new("which").arg(bin_name).output().ok()?;
-    if !check.status.success() {
-        return None;
+    for &bin in candidates {
+        let exists = if bin.starts_with('/') {
+            Path::new(bin).exists()
+        } else {
+            Command::new("which")
+                .arg(bin)
+                .output()
+                .map(|o| o.status.success())
+                .unwrap_or(false)
+        };
+
+        if exists {
+            let mut cmd = Command::new("sh");
+            cmd.arg("-c")
+                .arg(format!("nohup \"{}\" >/dev/null 2>&1 &", bin))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            inject_live_env(&mut cmd);
+
+            if cmd.spawn().is_ok() {
+                return Some(bin.to_string());
+            }
+        }
     }
 
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(format!("nohup {} >/dev/null 2>&1 &", bin_name))
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    inject_live_env(&mut cmd);
-
-    if cmd.spawn().is_ok() {
-        Some(bin_name.to_string())
-    } else {
-        None
-    }
+    None
 }
 
 pub fn launch_desktop_app(app: &DesktopApp) -> bool {

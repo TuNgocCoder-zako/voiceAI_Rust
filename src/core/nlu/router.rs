@@ -429,7 +429,7 @@ fn fast_path_nlu_internal(
         if let Some(caps) = OPEN_APP_MATCH_RE.captures(&t) {
             if let Some(m) = caps.get(1) {
                 let target = m.as_str().trim();
-                let clean_target = target
+                let mut clean_target = target
                     .trim_start_matches("trang web ")
                     .trim_start_matches("trang ")
                     .trim_start_matches("web ")
@@ -438,6 +438,17 @@ fn fast_path_nlu_internal(
                     .trim_start_matches("phần mềm ")
                     .trim_start_matches("app ")
                     .trim();
+
+                let trailing_suffixes = [
+                    " giúp tôi", " giúp mình", " hộ tôi", " hộ mình",
+                    " cho tôi", " cho mình", " lên đi", " lên nhé",
+                    " lên", " đi nhé", " đi", " nhé", " nha", " với", " với nhé", " ạ",
+                ];
+                for suf in trailing_suffixes {
+                    if clean_target.ends_with(suf) {
+                        clean_target = clean_target[..clean_target.len() - suf.len()].trim();
+                    }
+                }
 
                 // 1) Khớp Desktop App
                 if let Some(app) = match_app(clean_target, app_index) {
@@ -725,5 +736,49 @@ mod tests {
         let (h6, r6) = fast_path_nlu("mở giúp mình quản lý tệp đi", &app_index, true);
         assert!(h6, "Failed 'mở giúp mình quản lý tệp đi'");
         assert!(r6.to_lowercase().contains("tệp") || r6.to_lowercase().contains("files") || r6.to_lowercase().contains("nautilus"));
+    }
+
+    #[test]
+    fn test_browser_and_app_launching() {
+        let app_index = build_app_index();
+
+        // 1. Kiểm tra mở trình duyệt (chuẩn, dị âm Whisper "duật", và lịch sự)
+        let (b1, r1) = fast_path_nlu("mở trình duyệt", &app_index, true);
+        assert!(b1, "Failed 'mở trình duyệt'");
+        assert!(r1.to_lowercase().contains("mở") && (r1.to_lowercase().contains("firefox") || r1.to_lowercase().contains("chrome") || r1.to_lowercase().contains("browser")), "Got: {}", r1);
+
+        let (b2, r2) = fast_path_nlu("mở trình duật", &app_index, true);
+        assert!(b2, "Failed 'mở trình duật' (Whisper phonetic)");
+        assert!(r2.to_lowercase().contains("mở") && (r2.to_lowercase().contains("firefox") || r2.to_lowercase().contains("chrome") || r2.to_lowercase().contains("browser")), "Got: {}", r2);
+
+        let (b3, r3) = fast_path_nlu("mở trình duyệt web giúp tôi nhé", &app_index, true);
+        assert!(b3, "Failed 'mở trình duyệt web giúp tôi nhé'");
+        assert!(r3.to_lowercase().contains("mở"), "Got: {}", r3);
+
+        let (b4, r4) = fast_path_nlu("lướt web", &app_index, true);
+        assert!(b4, "Failed 'lướt web'");
+        assert!(r4.to_lowercase().contains("mở"), "Got: {}", r4);
+
+        // 2. Kiểm tra các app phổ biến trên máy
+        let (a1, _) = fast_path_nlu("mở dbeaver", &app_index, true);
+        assert!(a1, "Failed 'mở dbeaver'");
+
+        let (a2, _) = fast_path_nlu("mở onlyoffice", &app_index, true);
+        assert!(a2, "Failed 'mở onlyoffice'");
+
+        let (a3, _) = fast_path_nlu("mở intellij", &app_index, true);
+        assert!(a3, "Failed 'mở intellij'");
+
+        let (a4, _) = fast_path_nlu("mở lm studio", &app_index, true);
+        assert!(a4, "Failed 'mở lm studio'");
+
+        // 3. Web URL shortcuts mới
+        let (w1, rw1) = fast_path_nlu("mở tiktok", &app_index, true);
+        assert!(w1, "Failed 'mở tiktok'");
+        assert!(rw1.contains("TikTok"));
+
+        let (w2, rw2) = fast_path_nlu("mở canva", &app_index, true);
+        assert!(w2, "Failed 'mở canva'");
+        assert!(rw2.contains("Canva"));
     }
 }

@@ -46,6 +46,15 @@ impl Default for Config {
         url_shortcuts.insert("chatgpt".into(), "https://chatgpt.com".into());
         url_shortcuts.insert("claude".into(), "https://claude.ai".into());
         url_shortcuts.insert("gemini".into(), "https://gemini.google.com".into());
+        url_shortcuts.insert("tiktok".into(), "https://www.tiktok.com".into());
+        url_shortcuts.insert("shopee".into(), "https://shopee.vn".into());
+        url_shortcuts.insert("canva".into(), "https://www.canva.com".into());
+        url_shortcuts.insert("netflix".into(), "https://www.netflix.com".into());
+        url_shortcuts.insert("maps".into(), "https://maps.google.com".into());
+        url_shortcuts.insert("bản đồ".into(), "https://maps.google.com".into());
+        url_shortcuts.insert("dịch".into(), "https://translate.google.com".into());
+        url_shortcuts.insert("translate".into(), "https://translate.google.com".into());
+        url_shortcuts.insert("messenger".into(), "https://www.messenger.com".into());
 
         let mut url_display_names = HashMap::new();
         url_display_names.insert("youtube".into(), "YouTube".into());
@@ -57,6 +66,15 @@ impl Default for Config {
         url_display_names.insert("google".into(), "Google".into());
         url_display_names.insert("chrome".into(), "Google Chrome".into());
         url_display_names.insert("google chrome".into(), "Google Chrome".into());
+        url_display_names.insert("tiktok".into(), "TikTok".into());
+        url_display_names.insert("shopee".into(), "Shopee".into());
+        url_display_names.insert("canva".into(), "Canva".into());
+        url_display_names.insert("netflix".into(), "Netflix".into());
+        url_display_names.insert("maps".into(), "Google Maps".into());
+        url_display_names.insert("bản đồ".into(), "Google Maps".into());
+        url_display_names.insert("dịch".into(), "Google Dịch".into());
+        url_display_names.insert("translate".into(), "Google Dịch".into());
+        url_display_names.insert("messenger".into(), "Messenger".into());
 
         let mut app_aliases = HashMap::new();
         app_aliases.insert("vs code".into(), "code".into());

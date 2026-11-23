@@ -65,6 +65,11 @@ static UNACCENTED_INTENT_MAP: LazyLock<Vec<ReplacementRule>> = LazyLock::new(|| 
         (r"(?i)\bchuyen\s+no\s+sang\b", "chuyển nó sang"),
         (r"(?i)\bthoat\b", "thoát"),
         (r"(?i)\btrinh\s+duyet\b", "trình duyệt"),
+        (r"(?i)\btrinh\s+duat\b", "trình duyệt"),
+        (r"(?i)\bluot\s+web\b", "lướt web"),
+        (r"(?i)\bduyet\s+web\b", "duyệt web"),
+        (r"(?i)\blen\s+mang\b", "trình duyệt"),
+        (r"(?i)\bvao\s+mang\b", "trình duyệt"),
         // Thời gian & Thời tiết
         (r"(?i)\bmay\s+gio\s+roi\b", "mấy giờ rồi"),
         (r"(?i)\bmay\s+gio\b", "mấy giờ"),
@@ -167,6 +172,10 @@ static PHONETIC_CLEANUP_RULES: LazyLock<Vec<ReplacementRule>> = LazyLock::new(||
         (r"(?i)\b(?:vi\s*ét\s*cốt|vi\s*ét\s*code|vê\s*ét\s*cốt|vé\s*code|vét\s*cốt|phi\s*ét\s*cốt)\b", "vs code"),
         (r"(?i)\b(?:phai|fai|phay|fay|phi|pha|fire|file)[-\s]*(?:fox|fóc|phóc|phốc|phót|phó|phọt|phốt|phot|phoc|phóp|pho)\b", "firefox"),
         (r"(?i)\b(?:cáo\s*lửa|cáo\s*đỏ|hỏa\s*hồ)\b", "firefox"),
+        // Trình duyệt / Browser (xử lý triệt để các dị âm từ Whisper: duật, duyet, dượt, duột, dực...)
+        (r"(?i)\b(?:trình\s*(?:duật|duyet|dượt|duột|dực|giật|dọc|rực|duyệt)(?:\s*web)?|trình\s*lướt\s*web|duyệt\s*web|lướt\s*web)\b", "trình duyệt"),
+        (r"(?i)\b(?:web\s*browser|webbrowser)\b", "trình duyệt"),
+        (r"(?i)\b(?:lên\s*mạng|vào\s*mạng)\b", "trình duyệt"),
         // Chuẩn hóa "má / mà" -> "mở" CHỈ KHI đứng ngay trước tên app/web phổ biến
         (r"(?i)\b(?:má|mà|mả|mã)\s+(youtube|facebook|google|gmail|github|zalo|spotify|chrome|firefox|vs\s*code|terminal)\b", "mở $1"),
         // Whisper hearing "Firefox" as "5 phút"
