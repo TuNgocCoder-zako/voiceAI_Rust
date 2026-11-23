@@ -117,6 +117,10 @@ impl SoftAgc {
         self.current_gain
     }
 
+    pub fn reset(&mut self) {
+        self.current_gain = 1.0;
+    }
+
     /// Khuếch đại tại chỗ 1 khung f32 [-1.0, 1.0] và trả về mức RMS sau xử lý
     pub fn process_frame(&mut self, frame: &mut [f32]) -> f32 {
         if frame.is_empty() {
@@ -350,6 +354,7 @@ impl ContinuousAudioStream {
             }
         }
         self.pending_16k.clear();
+        self.agc.reset();
     }
 
     /// Trả về Ok(true) khi đọc đủ mẫu, Ok(false) khi bị ngắt bởi StateManager,
@@ -620,12 +625,12 @@ impl AudioRecorder {
         self.ensure_started()?;
         vad.reset();
 
-        const SPEECH_START_PROB: f32 = 0.45;
-        const SPEECH_CONT_PROB: f32 = 0.32;
+        const SPEECH_START_PROB: f32 = 0.42;
+        const SPEECH_CONT_PROB: f32 = 0.28;
         const START_MIN_FRAMES: u32 = 2;    // 64ms liên tiếp
-        const END_SILENCE_FRAMES: u32 = 22; // ~704ms im lặng để chốt câu (giữ trọn âm cuối)
+        const END_SILENCE_FRAMES: u32 = 34; // ~1088ms im lặng để chốt câu (không ngắt sớm khi ngập ngừng)
         const MIN_SPEECH_FRAMES: u32 = 8;   // ~256ms tối thiểu
-        const PREROLL_FRAMES: usize = 18;   // ~576ms đệm đầu câu
+        const PREROLL_FRAMES: usize = 20;   // ~640ms đệm đầu câu
 
         let max_wait_frames = ((initial_wait_secs * 1000.0) / 32.0).round() as u32;
         let max_speech_frames = ((max_speech_secs * 1000.0) / 32.0).round() as u32;

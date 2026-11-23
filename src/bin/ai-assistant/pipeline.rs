@@ -35,22 +35,27 @@ pub async fn capture_and_handle_followup(
     let mut one_breath_seed: Vec<Vec<f32>> = Vec::new();
     let mut is_one_breath = false;
 
-    // 1. Dò nhanh 320ms ngay sau Wake Word để xem người dùng có đang nói liền 1 hơi không
+    // 1. Dò nhanh 448ms (14 khung) ngay sau Wake Word để xem người dùng có đang nói liền 1 hơi không
     if allow_one_breath {
         if let Some(vad) = silero_vad.as_deref_mut() {
-            const PROBE_FRAMES: usize = 10; // 10 x 32ms = 320ms
-            let mut voice_after_wake = 0u32;
+            const PROBE_FRAMES: usize = 14; // 14 x 32ms = 448ms
+            let mut voice_after_tail = 0u32;
 
             for i in 0..PROBE_FRAMES {
                 if ctx.state_manager.is_interrupted() {
+                    if !ctx.state_manager.has_manual_trigger() {
+                        ctx.state_manager.set_state(AssistantState::Idle, None).await;
+                    }
                     return;
                 }
                 let mut f = vec![0.0f32; SileroVad::CHUNK_SAMPLES];
                 match ctx.recorder.read_frame_f32(&mut f, Some(&ctx.state_manager)) {
                     Ok(true) => {
                         let p = vad.process_chunk(&f).unwrap_or(0.0);
-                        if i >= 3 && p >= 0.45 {
-                            voice_after_wake += 1;
+                        // Chỉ tính giọng nói ở nửa sau cửa sổ (từ khung thứ 7 trở đi, 224ms..448ms)
+                        // để loại bỏ hoàn toàn âm đuôi "-xa" và tiếng vang dội phòng của Wake Word
+                        if i >= 7 && p >= 0.45 {
+                            voice_after_tail += 1;
                         }
                         one_breath_seed.push(f);
                     }
@@ -58,7 +63,7 @@ pub async fn capture_and_handle_followup(
                 }
             }
 
-            if voice_after_wake >= 3 {
+            if voice_after_tail >= 5 {
                 is_one_breath = true;
             }
         }
@@ -84,11 +89,14 @@ pub async fn capture_and_handle_followup(
             .await;
 
         play_chime(ChimeType::Wake);
-        tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
         ctx.recorder.flush();
     }
 
     if ctx.state_manager.is_interrupted() {
+        if !ctx.state_manager.has_manual_trigger() {
+            ctx.state_manager.set_state(AssistantState::Idle, None).await;
+        }
         return;
     }
 
@@ -98,14 +106,14 @@ pub async fn capture_and_handle_followup(
                 .record_command_with_silero_seeded(
                     vad,
                     &one_breath_seed,
-                    1.5,
-                    10.0,
+                    2.0,
+                    12.0,
                     Some(&ctx.state_manager),
                 )
                 .map_err(|e| e.to_string())
         } else {
             ctx.recorder
-                .record_command_with_silero(vad, 4.5, 10.0, Some(&ctx.state_manager))
+                .record_command_with_silero(vad, 6.0, 12.0, Some(&ctx.state_manager))
                 .map_err(|e| e.to_string())
         }
     } else {
@@ -117,6 +125,9 @@ pub async fn capture_and_handle_followup(
     match followup_res {
         Ok(followup_samples) => {
             if ctx.state_manager.is_interrupted() {
+                if !ctx.state_manager.has_manual_trigger() {
+                    ctx.state_manager.set_state(AssistantState::Idle, None).await;
+                }
                 return;
             }
             if followup_samples.len() < 3200 {

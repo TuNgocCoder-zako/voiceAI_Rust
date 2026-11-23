@@ -55,7 +55,9 @@ pub fn play_chime(chime: ChimeType) {
             }
             let _ = stdin.write_all(&byte_buf);
         }
-        let _ = c.wait();
+        std::thread::spawn(move || {
+            let _ = c.wait();
+        });
     }
 }
 

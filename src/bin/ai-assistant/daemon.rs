@@ -275,6 +275,10 @@ pub async fn run_wake_word_loop(
                                 )
                                 .await;
 
+                                if !ctx.state_manager.has_manual_trigger() && !ctx.tts.is_speaking() {
+                                    ctx.state_manager.set_state(AssistantState::Idle, None).await;
+                                }
+
                                 engine.reset();
                                 if let Some(v) = silero_vad.as_mut() {
                                     v.reset();
@@ -323,6 +327,10 @@ pub async fn run_wake_word_loop(
                                     false,
                                 )
                                 .await;
+
+                                if !ctx.state_manager.has_manual_trigger() && !ctx.tts.is_speaking() {
+                                    ctx.state_manager.set_state(AssistantState::Idle, None).await;
+                                }
                             } else {
                                 play_chime(ChimeType::Wake);
                                 ctx.state_manager

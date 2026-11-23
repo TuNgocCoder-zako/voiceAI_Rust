@@ -1,13 +1,18 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState};
+
+struct LoadedWhisper {
+    _ctx: WhisperContext,
+    state: WhisperState,
+}
 
 pub struct WhisperEngine {
     cli_path: PathBuf,
     model_path: PathBuf,
     threads: usize,
-    ctx: Mutex<Option<WhisperContext>>,
+    loaded: Mutex<Option<LoadedWhisper>>,
 }
 
 impl WhisperEngine {
@@ -45,7 +50,7 @@ impl WhisperEngine {
             cli_path,
             model_path,
             threads: num_cpus,
-            ctx: Mutex::new(None),
+            loaded: Mutex::new(None),
         }
     }
 
@@ -78,7 +83,7 @@ impl WhisperEngine {
             cli_path,
             model_path,
             threads: num_cpus,
-            ctx: Mutex::new(None),
+            loaded: Mutex::new(None),
         }
     }
 
@@ -101,7 +106,7 @@ impl WhisperEngine {
         if !self.model_path.exists() {
             return Err(format!("Không tìm thấy model Whisper tại {:?}", self.model_path).into());
         }
-        let mut guard = self.ctx.lock().unwrap();
+        let mut guard = self.loaded.lock().unwrap();
         if guard.is_none() {
             let model_str = self
                 .model_path
@@ -117,12 +122,15 @@ impl WhisperEngine {
             }
             let ctx = WhisperContext::new_with_params(model_str, cparams)
                 .map_err(|e| format!("Lỗi nạp WhisperContext ({:?}): {:?}", self.model_path, e))?;
+            let state = ctx
+                .create_state()
+                .map_err(|e| format!("Không tạo được WhisperState: {:?}", e))?;
             println!(
-                "⚡ [Whisper Native {}]: Đã nạp sẵn model {:?}.",
+                "⚡ [Whisper Native {}]: Đã nạp sẵn model {:?} và khởi tạo bộ đệm suy luận.",
                 if use_gpu { "Vulkan GPU" } else { "CPU RAM" },
                 self.model_path
             );
-            *guard = Some(ctx);
+            *guard = Some(LoadedWhisper { _ctx: ctx, state });
         }
         Ok(())
     }
@@ -142,11 +150,9 @@ impl WhisperEngine {
         whisper_rs::convert_integer_to_float_audio(samples_i16, &mut audio_f32)
             .map_err(|e| format!("Lỗi chuyển đổi PCM -> f32: {:?}", e))?;
 
-        let guard = self.ctx.lock().unwrap();
-        let ctx = guard.as_ref().ok_or("WhisperContext chưa sẵn sàng")?;
-        let mut state = ctx
-            .create_state()
-            .map_err(|e| format!("Không tạo được WhisperState: {:?}", e))?;
+        let mut guard = self.loaded.lock().unwrap();
+        let loaded = guard.as_mut().ok_or("WhisperState chưa sẵn sàng")?;
+        let state = &mut loaded.state;
 
         const WHISPER_PROMPT: &str = "Xin chào, bây giờ là mấy giờ, thời tiết hôm nay thế nào, \
             mở YouTube, mở Google Chrome, mở Firefox, mở VS Code, mở Spotify, \
