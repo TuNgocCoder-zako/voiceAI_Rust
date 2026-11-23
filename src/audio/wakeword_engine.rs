@@ -218,6 +218,9 @@ impl UnifiedWakeWordEngine {
                                 debug_summary: last_summary,
                                 active_threshold: last_threshold,
                             });
+                        } else {
+                            // Bị chặn bởi VAD-Gate: hủy cooldown để không nuốt nhịp gọi thực của người dùng
+                            detector.cancel_cooldown();
                         }
                     }
                 }

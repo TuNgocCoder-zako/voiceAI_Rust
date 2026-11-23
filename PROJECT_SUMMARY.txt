@@ -1,20 +1,22 @@
 ================================================================================
-          TỔNG HỢP & TÓM TẮT CẤU TRÚC MÃ NGUỒN DỰ ÁN VOICE AI (v3.5.0)
+          TỔNG HỢP & TÓM TẮT CẤU TRÚC MÃ NGUỒN DỰ ÁN VOICE AI (v3.5.1)
 ================================================================================
-Thời gian cập nhật: 2026-11-23 13:25:53
+Thời gian cập nhật: 2026-11-23 13:38:00
 
 1. TỔNG QUAN DỰ ÁN
 --------------------------------------------------------------------------------
 - Tên dự án: Voice AI - Native Rust Engine
-- Phiên bản: 3.5.0
+- Phiên bản: 3.5.1 (Tối ưu hóa Độ nhạy Wake Word & Loại bỏ hoàn toàn khoảng mù 2s sau Reset)
 - Ngôn ngữ & Nền tảng: Pure Rust (2021 edition), Linux (Ubuntu Wayland / X11)
 - Phần cứng tối ưu: NVIDIA GeForce RTX (Vulkan Backend) + PipeWire 1.6+ AEC WebRTC
-- Mục đích: Trợ lý ảo AI cục bộ siêu tốc độ (Local Voice AI Assistant), phản hồi
-  sub-microsecond với kiến trúc Fast-Path NLU, STT Whisper Large Turbo Native trên Vulkan GPU,
-  Unified Wake Word Engine (Porcupine 32ms + openWakeWord ONNX có Silero VAD-Gate),
-  cơ chế nói liền 1 hơi (One-Breath), Streaming Soft-AGC (thu xa 2-4m), điều hướng đa mô hình
-  Ollama LLM có hủy stream TCP (chat_with_cancel), Piper TTS streaming không zombie,
-  và giao diện Dynamic Island QML (Quickshell).
+- Điểm nâng cấp then chốt v3.5.1:
+  1. Loại bỏ khoảng mù 2.08s sau reset: `OpenWakeWordDetector::prefill_silence()` nạp sẵn
+     khung phổ tĩnh baseline ngay khi khởi động và sau mỗi lượt reset, giúp AI phản hồi ngay khung 0.
+  2. Hiệu chỉnh phần cứng Micro ALSA Intel PCH: Hạ gain quá tải (+50dB xuống mức cân bằng +28dB),
+     triệt tiêu sóng rung 330Hz máy tính, đưa RMS tĩnh từ 0.18 về mức chuẩn 0.02.
+  3. Cơ chế Cooldown Rollback cho VAD-Gate: Khi tạp âm bị VAD chặn, cooldown 1.5s được giải phóng
+     ngay tức thì, không gây nuốt nhịp khi người dùng cất tiếng gọi "Alexa".
+  4. Ngưỡng bắt nhạy tối ưu: `AI_ASSISTANT_WAKE_THRESHOLD=0.40`, `patience_frames=1`.
 
 
 2. SƠ ĐỒ CÂY CẤU TRÚC FILE (PROJECT DIRECTORY TREE)

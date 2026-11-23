@@ -18,11 +18,11 @@ impl Default for OpenWakeWordConfig {
         let base_threshold = std::env::var("AI_ASSISTANT_WAKE_THRESHOLD")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.45);
+            .unwrap_or(0.40);
         Self {
             base_threshold,
             music_boost: 0.05,
-            patience_frames: 2,
+            patience_frames: 1,
             cooldown_secs: 1.5,
         }
     }
@@ -68,13 +68,18 @@ impl TriggerGate {
         self.patience_counts.fill(0);
     }
 
+    /// Hủy thời gian cooldown nếu phát hiện bị từ chối bởi tầng lọc phía sau (ví dụ VAD-Gate)
+    pub fn cancel_cooldown(&mut self) {
+        self.last_trigger = None;
+    }
+
     pub fn evaluate(
         &mut self,
         scores: &[(WakeWordType, f32)],
         is_music_playing: bool,
     ) -> Option<(WakeWordType, f32)> {
         let threshold = self.active_threshold(is_music_playing);
-        let fast_peak_threshold = (threshold + 0.22).min(0.85);
+        let fast_peak_threshold = (threshold + 0.16).min(0.75);
 
         if let Some(last) = self.last_trigger {
             if last.elapsed() < Duration::from_secs_f32(self.config.cooldown_secs) {
@@ -185,7 +190,7 @@ impl OpenWakeWordDetector {
         }
 
         let num_models = classifiers.len();
-        Ok(Self {
+        let mut det = Self {
             melspec,
             embedding,
             classifiers,
@@ -193,7 +198,41 @@ impl OpenWakeWordDetector {
             mel_buffer: VecDeque::with_capacity(128),
             feature_buffer: VecDeque::with_capacity(32),
             gate: TriggerGate::new(num_models, config),
-        })
+        };
+        det.prefill_silence();
+        Ok(det)
+    }
+
+    /// Khởi tạo hoặc làm sạch bộ đệm với khung yên lặng (silence baseline)
+    /// để mô hình sẵn sàng chấm điểm ngay khung 0 mà không bị điếc 2 giây
+    fn prefill_silence(&mut self) {
+        self.prev_raw.fill(0.0);
+        self.mel_buffer.clear();
+        for _ in 0..Self::MEL_WINDOW {
+            self.mel_buffer.push_back([-8.0f32; 32]);
+        }
+
+        // Tạo 1 vector embedding mẫu từ 76 khung mel yên lặng
+        let mut emb_input = Vec::with_capacity(Self::MEL_WINDOW * 32);
+        for frame in &self.mel_buffer {
+            emb_input.extend_from_slice(frame);
+        }
+
+        let mut silence_vec = [0.0f32; 96];
+        if let Ok(emb_in) = Tensor::from_array(([1usize, Self::MEL_WINDOW, 32, 1], emb_input)) {
+            if let Ok(emb_out) = self.embedding.run(ort::inputs![emb_in]) {
+                if let Ok((_, emb_raw)) = emb_out[0].try_extract_tensor::<f32>() {
+                    if emb_raw.len() >= 96 {
+                        silence_vec.copy_from_slice(&emb_raw[..96]);
+                    }
+                }
+            }
+        }
+
+        self.feature_buffer.clear();
+        for _ in 0..Self::EMB_WINDOW {
+            self.feature_buffer.push_back(silence_vec);
+        }
     }
 
     pub fn load_default() -> Option<Self> {
@@ -231,12 +270,15 @@ impl OpenWakeWordDetector {
         }
     }
 
-    /// Xóa bộ đệm nội bộ sau khi thu lệnh hoặc phát TTS để tránh dữ liệu gián đoạn
+    /// Làm sạch bộ đệm sau khi thu lệnh hoặc phát TTS mà vẫn giữ trạng thái sẵn sàng tức thì
     pub fn reset(&mut self) {
-        self.prev_raw.fill(0.0);
-        self.mel_buffer.clear();
-        self.feature_buffer.clear();
+        self.prefill_silence();
         self.gate.reset();
+    }
+
+    /// Hủy thời gian cooldown nếu khung phát hiện bị chặn bởi VAD-Gate
+    pub fn cancel_cooldown(&mut self) {
+        self.gate.cancel_cooldown();
     }
 
     /// Đưa vào đúng 1280 mẫu f32 [-1.0, 1.0] (80ms @ 16kHz)
@@ -433,5 +475,36 @@ mod tests {
             gate.evaluate(&[(WakeWordType::Alexa, 0.45)], false),
             Some((WakeWordType::Alexa, 0.45))
         );
+    }
+
+    #[test]
+    fn test_prefilled_zero_latency_detection() {
+        if !std::path::Path::new("/tmp/alexa.raw").exists() {
+            return;
+        }
+        let mut det = match OpenWakeWordDetector::load_default() {
+            Some(d) => d,
+            None => return,
+        };
+        // Reset immediately should keep it ready!
+        det.reset();
+
+        let bytes = std::fs::read("/tmp/alexa.raw").unwrap();
+        let samples: Vec<f32> = bytes
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        
+        let mut detected_any = false;
+        for (i, chunk) in samples.chunks_exact(1280).enumerate() {
+            let res = det.process_frame(chunk, false).unwrap();
+            for &(ww, score) in &res.scores {
+                if ww == WakeWordType::Alexa && score >= 0.40 {
+                    println!("DETECTION at frame {}: score = {:.4}", i, score);
+                    detected_any = true;
+                }
+            }
+        }
+        assert!(detected_any, "Should detect Alexa with prefilled buffers immediately after reset!");
     }
 }
