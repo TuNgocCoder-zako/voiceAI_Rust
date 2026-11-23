@@ -16,6 +16,7 @@ Environment=AI_ASSISTANT_WHISPER_GPU=0
 Environment=AI_ASSISTANT_WHISPER_MODEL=%h/Projects/rust/voice-ai/models/whisper/ggml-large-v3-turbo-q5_0.bin
 Environment=PICOVOICE_ACCESS_KEY=
 Environment=AI_ASSISTANT_PORCUPINE_SENSITIVITY=0.65
+Environment=AI_ASSISTANT_WAKE_THRESHOLD=0.35
 PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
 StandardOutput=journal
 StandardError=journal

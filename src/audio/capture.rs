@@ -103,12 +103,12 @@ pub struct SoftAgc {
 impl SoftAgc {
     pub fn new() -> Self {
         Self {
-            target_rms: 0.08,
+            target_rms: 0.12,
             noise_floor_rms: 0.004,
             max_gain: 3.5,
-            min_gain: 0.5,
-            attack: 0.35,
-            release: 0.06,
+            min_gain: 1.0,
+            attack: 0.30,
+            release: 0.18,
             current_gain: 1.0,
         }
     }

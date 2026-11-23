@@ -178,16 +178,17 @@ impl UnifiedWakeWordEngine {
                 pcm_queue,
                 vad_voice_window,
             } => {
-                // Giữ cửa sổ giọng người ~800ms (25 khung x 32ms) để mở cổng cho OWW
-                if vad_prob >= 0.25 {
-                    *vad_voice_window = 25;
+                // Giữ cửa sổ giọng người ~960ms (30 khung x 32ms) để mở cổng cho OWW
+                // Ngưỡng vad_prob >= 0.15 bắt trọn giọng nói nhỏ, thì thầm từ xa
+                if vad_prob >= 0.15 {
+                    *vad_voice_window = 30;
                 } else {
                     *vad_voice_window = vad_voice_window.saturating_sub(1);
                 }
 
                 pcm_queue.extend(frame_512.iter().copied());
                 let mut last_summary = String::new();
-                let mut last_threshold = 0.48;
+                let mut last_threshold = 0.35;
 
                 while pcm_queue.len() >= OpenWakeWordDetector::FRAME_SAMPLES {
                     let frame_1280: Vec<f32> = pcm_queue
@@ -206,8 +207,8 @@ impl UnifiedWakeWordEngine {
                     }
 
                     if let Some((ww_type, score)) = res.detected {
-                        // VAD-Gate: chỉ chấp nhận khi có giọng người gần đây (hoặc điểm cực cao >= 0.65)
-                        if *vad_voice_window > 0 || score >= 0.65 {
+                        // VAD-Gate: chỉ chấp nhận khi có giọng người gần đây (hoặc điểm cực cao >= 0.60)
+                        if *vad_voice_window > 0 || score >= 0.60 {
                             return Ok(WakeFrameStatus {
                                 detected: Some(WakeHit {
                                     wake_word: ww_type,
