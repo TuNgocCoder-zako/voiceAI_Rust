@@ -104,12 +104,9 @@ pub fn detect_internal_mic_card() -> String {
 
 pub fn ensure_mic_levels() {
     let card = detect_internal_mic_card();
-    // Bật phần cứng Internal Mic Boost trên ALSA nếu có
-    let _ = Command::new("amixer")
-        .args(["-c", &card, "sset", "Internal Mic Boost", "1"])
-        .output();
 
-    // Nâng gain cho micro phần cứng cơ sở trong PipeWire (chống bị giảm âm lượng nguồn)
+    // 1. Cấu hình volume PipeWire cho micro cơ sở (Built-in Audio)
+    // Mức 0.20 tương ứng khoảng +18dB trên ALSA, vừa đủ thu nhạy mà tuyệt đối không kích hoạt Boost làm rè
     if let Ok(out) = Command::new("wpctl").arg("status").output() {
         if let Ok(text) = String::from_utf8(out.stdout) {
             let mut in_sources = false;
@@ -122,14 +119,14 @@ pub fn ensure_mic_levels() {
                     in_sources = false;
                 }
                 if in_sources && line.contains("[vol:") {
-                    // Bỏ qua nguồn EchoCancel hoặc VoiceAI để không kéo ngược volume của EchoCancel xuống 0.85
+                    // Bỏ qua nguồn EchoCancel hoặc VoiceAI để không kéo ngược volume của EchoCancel xuống
                     if line.contains("EchoCancel") || line.contains("VoiceAI") {
                         continue;
                     }
                     if let Some(token) = line.split('.').next() {
                         let id = token.trim().trim_start_matches(|c: char| !c.is_ascii_digit());
                         if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-                            let _ = Command::new("wpctl").args(["set-volume", id, "0.85"]).output();
+                            let _ = Command::new("wpctl").args(["set-volume", id, "0.20"]).output();
                             let _ = Command::new("wpctl").args(["set-mute", id, "0"]).output();
                         }
                     }
@@ -138,7 +135,15 @@ pub fn ensure_mic_levels() {
         }
     }
 
-    // Đồng bộ mức âm lượng 1.0 và bỏ mute cho PipeWire EchoCancel_Source (chạy sau cùng để đảm bảo không bị ghi đè)
+    // 2. Khóa cứng ALSA mixer để chống vỡ tiếng ADC Realtek và triệt tiêu tiếng ù cơ học 50-70Hz
+    let _ = Command::new("amixer")
+        .args(["-c", &card, "sset", "Internal Mic Boost", "0"])
+        .output();
+    let _ = Command::new("amixer")
+        .args(["-c", &card, "sset", "Capture", "40"])
+        .output();
+
+    // 3. Đồng bộ mức âm lượng 1.0 và bỏ mute cho PipeWire EchoCancel_Source
     let _ = Command::new("wpctl")
         .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", "1.0"])
         .output();

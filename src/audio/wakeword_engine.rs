@@ -34,6 +34,7 @@ pub enum UnifiedWakeWordEngine {
         detector: OpenWakeWordDetector,
         pcm_queue: VecDeque<f32>,
         vad_voice_window: u32,
+        last_summary: String,
     },
 }
 
@@ -90,6 +91,7 @@ impl UnifiedWakeWordEngine {
             detector,
             pcm_queue: VecDeque::with_capacity(2048),
             vad_voice_window: 0,
+            last_summary: String::new(),
         })
     }
 
@@ -109,10 +111,12 @@ impl UnifiedWakeWordEngine {
                 detector,
                 pcm_queue,
                 vad_voice_window,
+                last_summary,
             } => {
                 detector.reset();
                 pcm_queue.clear();
                 *vad_voice_window = 0;
+                last_summary.clear();
             }
         }
     }
@@ -177,6 +181,7 @@ impl UnifiedWakeWordEngine {
                 detector,
                 pcm_queue,
                 vad_voice_window,
+                last_summary,
             } => {
                 // Giữ cửa sổ giọng người ~960ms (30 khung x 32ms) để mở cổng cho OWW
                 // Ngưỡng vad_prob >= 0.15 bắt trọn giọng nói nhỏ, thì thầm từ xa
@@ -187,7 +192,6 @@ impl UnifiedWakeWordEngine {
                 }
 
                 pcm_queue.extend(frame_512.iter().copied());
-                let mut last_summary = String::new();
                 let mut last_threshold = 0.35;
 
                 while pcm_queue.len() >= OpenWakeWordDetector::FRAME_SAMPLES {
@@ -198,7 +202,7 @@ impl UnifiedWakeWordEngine {
                     last_threshold = res.active_threshold;
 
                     if !res.scores.is_empty() {
-                        last_summary = res
+                        *last_summary = res
                             .scores
                             .iter()
                             .map(|(t, s)| format!("{}: {:.2}", t.name(), s))
@@ -215,7 +219,7 @@ impl UnifiedWakeWordEngine {
                                     score,
                                     backend: "openWakeWord",
                                 }),
-                                debug_summary: last_summary,
+                                debug_summary: last_summary.clone(),
                                 active_threshold: last_threshold,
                             });
                         } else {
@@ -227,7 +231,7 @@ impl UnifiedWakeWordEngine {
 
                 Ok(WakeFrameStatus {
                     detected: None,
-                    debug_summary: last_summary,
+                    debug_summary: last_summary.clone(),
                     active_threshold: last_threshold,
                 })
             }

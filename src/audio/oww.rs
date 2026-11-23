@@ -18,7 +18,7 @@ impl Default for OpenWakeWordConfig {
         let base_threshold = std::env::var("AI_ASSISTANT_WAKE_THRESHOLD")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.40);
+            .unwrap_or(0.35);
         Self {
             base_threshold,
             music_boost: 0.05,
@@ -479,28 +479,28 @@ mod tests {
 
     #[test]
     fn test_prefilled_zero_latency_detection() {
-        if !std::path::Path::new("/tmp/alexa.raw").exists() {
+        let p = if std::path::Path::new("/tmp/alexa.raw").exists() {
+            "/tmp/alexa.raw"
+        } else {
             return;
-        }
+        };
         let mut det = match OpenWakeWordDetector::load_default() {
             Some(d) => d,
             None => return,
         };
-        // Reset immediately should keep it ready!
         det.reset();
 
-        let bytes = std::fs::read("/tmp/alexa.raw").unwrap();
+        let bytes = std::fs::read(p).unwrap();
         let samples: Vec<f32> = bytes
             .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         
         let mut detected_any = false;
-        for (i, chunk) in samples.chunks_exact(1280).enumerate() {
+        for chunk in samples.chunks_exact(1280) {
             let res = det.process_frame(chunk, false).unwrap();
             for &(ww, score) in &res.scores {
                 if ww == WakeWordType::Alexa && score >= 0.40 {
-                    println!("DETECTION at frame {}: score = {:.4}", i, score);
                     detected_any = true;
                 }
             }

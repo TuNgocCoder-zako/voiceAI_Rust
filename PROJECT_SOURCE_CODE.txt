@@ -73,7 +73,7 @@ Environment=AI_ASSISTANT_WHISPER_GPU=0
 Environment=AI_ASSISTANT_WHISPER_MODEL=%h/Projects/rust/voice-ai/models/whisper/ggml-large-v3-turbo-q5_0.bin
 Environment=PICOVOICE_ACCESS_KEY=
 Environment=AI_ASSISTANT_PORCUPINE_SENSITIVITY=0.65
-Environment=AI_ASSISTANT_WAKE_THRESHOLD=0.40
+Environment=AI_ASSISTANT_WAKE_THRESHOLD=0.35
 PassEnvironment=WAYLAND_DISPLAY DISPLAY XDG_CURRENT_DESKTOP XDG_RUNTIME_DIR
 StandardOutput=journal
 StandardError=journal
@@ -3053,7 +3053,7 @@ impl Default for OpenWakeWordConfig {
         let base_threshold = std::env::var("AI_ASSISTANT_WAKE_THRESHOLD")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(0.40);
+            .unwrap_or(0.35);
         Self {
             base_threshold,
             music_boost: 0.05,
@@ -3514,28 +3514,28 @@ mod tests {
 
     #[test]
     fn test_prefilled_zero_latency_detection() {
-        if !std::path::Path::new("/tmp/alexa.raw").exists() {
+        let p = if std::path::Path::new("/tmp/alexa.raw").exists() {
+            "/tmp/alexa.raw"
+        } else {
             return;
-        }
+        };
         let mut det = match OpenWakeWordDetector::load_default() {
             Some(d) => d,
             None => return,
         };
-        // Reset immediately should keep it ready!
         det.reset();
 
-        let bytes = std::fs::read("/tmp/alexa.raw").unwrap();
+        let bytes = std::fs::read(p).unwrap();
         let samples: Vec<f32> = bytes
             .chunks_exact(4)
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         
         let mut detected_any = false;
-        for (i, chunk) in samples.chunks_exact(1280).enumerate() {
+        for chunk in samples.chunks_exact(1280) {
             let res = det.process_frame(chunk, false).unwrap();
             for &(ww, score) in &res.scores {
                 if ww == WakeWordType::Alexa && score >= 0.40 {
-                    println!("DETECTION at frame {}: score = {:.4}", i, score);
                     detected_any = true;
                 }
             }
@@ -4507,6 +4507,7 @@ pub enum UnifiedWakeWordEngine {
         detector: OpenWakeWordDetector,
         pcm_queue: VecDeque<f32>,
         vad_voice_window: u32,
+        last_summary: String,
     },
 }
 
@@ -4563,6 +4564,7 @@ impl UnifiedWakeWordEngine {
             detector,
             pcm_queue: VecDeque::with_capacity(2048),
             vad_voice_window: 0,
+            last_summary: String::new(),
         })
     }
 
@@ -4582,10 +4584,12 @@ impl UnifiedWakeWordEngine {
                 detector,
                 pcm_queue,
                 vad_voice_window,
+                last_summary,
             } => {
                 detector.reset();
                 pcm_queue.clear();
                 *vad_voice_window = 0;
+                last_summary.clear();
             }
         }
     }
@@ -4650,6 +4654,7 @@ impl UnifiedWakeWordEngine {
                 detector,
                 pcm_queue,
                 vad_voice_window,
+                last_summary,
             } => {
                 // Giữ cửa sổ giọng người ~960ms (30 khung x 32ms) để mở cổng cho OWW
                 // Ngưỡng vad_prob >= 0.15 bắt trọn giọng nói nhỏ, thì thầm từ xa
@@ -4660,7 +4665,6 @@ impl UnifiedWakeWordEngine {
                 }
 
                 pcm_queue.extend(frame_512.iter().copied());
-                let mut last_summary = String::new();
                 let mut last_threshold = 0.35;
 
                 while pcm_queue.len() >= OpenWakeWordDetector::FRAME_SAMPLES {
@@ -4671,7 +4675,7 @@ impl UnifiedWakeWordEngine {
                     last_threshold = res.active_threshold;
 
                     if !res.scores.is_empty() {
-                        last_summary = res
+                        *last_summary = res
                             .scores
                             .iter()
                             .map(|(t, s)| format!("{}: {:.2}", t.name(), s))
@@ -4688,7 +4692,7 @@ impl UnifiedWakeWordEngine {
                                     score,
                                     backend: "openWakeWord",
                                 }),
-                                debug_summary: last_summary,
+                                debug_summary: last_summary.clone(),
                                 active_threshold: last_threshold,
                             });
                         } else {
@@ -4700,7 +4704,7 @@ impl UnifiedWakeWordEngine {
 
                 Ok(WakeFrameStatus {
                     detected: None,
-                    debug_summary: last_summary,
+                    debug_summary: last_summary.clone(),
                     active_threshold: last_threshold,
                 })
             }
@@ -5383,6 +5387,8 @@ pub async fn run_wake_word_loop(
 
     let mut last_music_check = Instant::now() - std::time::Duration::from_secs(5);
     let mut cached_music_playing = false;
+    let mut last_heartbeat = Instant::now();
+    let mut last_vad_log = Instant::now() - std::time::Duration::from_secs(5);
 
     loop {
         // 1. Ưu tiên xử lý kích hoạt thủ công (--trigger / --relisten)
@@ -5449,6 +5455,7 @@ pub async fn run_wake_word_loop(
             let mut frame_512 = [0.0f32; SileroVad::CHUNK_SAMPLES];
             match ctx.recorder.read_frame_f32(&mut frame_512, Some(&ctx.state_manager)) {
                 Ok(true) => {
+                    let rms = (frame_512.iter().map(|&s| s * s).sum::<f32>() / frame_512.len() as f32).sqrt();
                     let vad_prob = silero_vad
                         .as_mut()
                         .and_then(|v| v.process_chunk(&frame_512).ok())
@@ -5456,6 +5463,27 @@ pub async fn run_wake_word_loop(
 
                     match engine.process_frame_512(&frame_512, vad_prob, cached_music_playing) {
                         Ok(res) => {
+                            // Ghi log chi tiết khi phát hiện giọng người (VAD >= 0.20) hoặc âm lượng có tiếng nói (RMS >= 0.02)
+                            if vad_prob >= 0.20 || rms >= 0.025 {
+                                if last_vad_log.elapsed() >= std::time::Duration::from_millis(500) {
+                                    println!(
+                                        "🎙️ [Thu âm]: Giọng nói (VAD={:.2}, RMS={:.3}) | {}",
+                                        vad_prob,
+                                        rms,
+                                        if res.debug_summary.is_empty() { "chờ điểm OWW..." } else { &res.debug_summary }
+                                    );
+                                    last_vad_log = Instant::now();
+                                }
+                            } else if last_heartbeat.elapsed() >= std::time::Duration::from_secs(5) {
+                                println!(
+                                    "🎙️ [Túc trực]: Mic đang lắng nghe (RMS={:.4}, VAD={:.2}) | {}",
+                                    rms,
+                                    vad_prob,
+                                    if res.debug_summary.is_empty() { "sẵn sàng" } else { &res.debug_summary }
+                                );
+                                last_heartbeat = Instant::now();
+                            }
+
                             if let Some(hit) = res.detected {
                                 println!(
                                     "\n✨ [{}: {}] Độ khớp: {:.2} (Ngưỡng: {:.2}{})",
@@ -6533,12 +6561,9 @@ pub fn detect_internal_mic_card() -> String {
 
 pub fn ensure_mic_levels() {
     let card = detect_internal_mic_card();
-    // Bật phần cứng Internal Mic Boost trên ALSA nếu có
-    let _ = Command::new("amixer")
-        .args(["-c", &card, "sset", "Internal Mic Boost", "1"])
-        .output();
 
-    // Nâng gain cho micro phần cứng cơ sở trong PipeWire (chống bị giảm âm lượng nguồn)
+    // 1. Cấu hình volume PipeWire cho micro cơ sở (Built-in Audio)
+    // Mức 0.20 tương ứng khoảng +18dB trên ALSA, vừa đủ thu nhạy mà tuyệt đối không kích hoạt Boost làm rè
     if let Ok(out) = Command::new("wpctl").arg("status").output() {
         if let Ok(text) = String::from_utf8(out.stdout) {
             let mut in_sources = false;
@@ -6551,14 +6576,14 @@ pub fn ensure_mic_levels() {
                     in_sources = false;
                 }
                 if in_sources && line.contains("[vol:") {
-                    // Bỏ qua nguồn EchoCancel hoặc VoiceAI để không kéo ngược volume của EchoCancel xuống 0.85
+                    // Bỏ qua nguồn EchoCancel hoặc VoiceAI để không kéo ngược volume của EchoCancel xuống
                     if line.contains("EchoCancel") || line.contains("VoiceAI") {
                         continue;
                     }
                     if let Some(token) = line.split('.').next() {
                         let id = token.trim().trim_start_matches(|c: char| !c.is_ascii_digit());
                         if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) {
-                            let _ = Command::new("wpctl").args(["set-volume", id, "0.85"]).output();
+                            let _ = Command::new("wpctl").args(["set-volume", id, "0.20"]).output();
                             let _ = Command::new("wpctl").args(["set-mute", id, "0"]).output();
                         }
                     }
@@ -6567,7 +6592,15 @@ pub fn ensure_mic_levels() {
         }
     }
 
-    // Đồng bộ mức âm lượng 1.0 và bỏ mute cho PipeWire EchoCancel_Source (chạy sau cùng để đảm bảo không bị ghi đè)
+    // 2. Khóa cứng ALSA mixer để chống vỡ tiếng ADC Realtek và triệt tiêu tiếng ù cơ học 50-70Hz
+    let _ = Command::new("amixer")
+        .args(["-c", &card, "sset", "Internal Mic Boost", "0"])
+        .output();
+    let _ = Command::new("amixer")
+        .args(["-c", &card, "sset", "Capture", "40"])
+        .output();
+
+    // 3. Đồng bộ mức âm lượng 1.0 và bỏ mute cho PipeWire EchoCancel_Source
     let _ = Command::new("wpctl")
         .args(["set-volume", "@DEFAULT_AUDIO_SOURCE@", "1.0"])
         .output();

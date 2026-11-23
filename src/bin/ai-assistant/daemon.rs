@@ -190,6 +190,8 @@ pub async fn run_wake_word_loop(
 
     let mut last_music_check = Instant::now() - std::time::Duration::from_secs(5);
     let mut cached_music_playing = false;
+    let mut last_heartbeat = Instant::now();
+    let mut last_vad_log = Instant::now() - std::time::Duration::from_secs(5);
 
     loop {
         // 1. Ưu tiên xử lý kích hoạt thủ công (--trigger / --relisten)
@@ -256,6 +258,7 @@ pub async fn run_wake_word_loop(
             let mut frame_512 = [0.0f32; SileroVad::CHUNK_SAMPLES];
             match ctx.recorder.read_frame_f32(&mut frame_512, Some(&ctx.state_manager)) {
                 Ok(true) => {
+                    let rms = (frame_512.iter().map(|&s| s * s).sum::<f32>() / frame_512.len() as f32).sqrt();
                     let vad_prob = silero_vad
                         .as_mut()
                         .and_then(|v| v.process_chunk(&frame_512).ok())
@@ -263,6 +266,27 @@ pub async fn run_wake_word_loop(
 
                     match engine.process_frame_512(&frame_512, vad_prob, cached_music_playing) {
                         Ok(res) => {
+                            // Ghi log chi tiết khi phát hiện giọng người (VAD >= 0.20) hoặc âm lượng có tiếng nói (RMS >= 0.02)
+                            if vad_prob >= 0.20 || rms >= 0.025 {
+                                if last_vad_log.elapsed() >= std::time::Duration::from_millis(500) {
+                                    println!(
+                                        "🎙️ [Thu âm]: Giọng nói (VAD={:.2}, RMS={:.3}) | {}",
+                                        vad_prob,
+                                        rms,
+                                        if res.debug_summary.is_empty() { "chờ điểm OWW..." } else { &res.debug_summary }
+                                    );
+                                    last_vad_log = Instant::now();
+                                }
+                            } else if last_heartbeat.elapsed() >= std::time::Duration::from_secs(5) {
+                                println!(
+                                    "🎙️ [Túc trực]: Mic đang lắng nghe (RMS={:.4}, VAD={:.2}) | {}",
+                                    rms,
+                                    vad_prob,
+                                    if res.debug_summary.is_empty() { "sẵn sàng" } else { &res.debug_summary }
+                                );
+                                last_heartbeat = Instant::now();
+                            }
+
                             if let Some(hit) = res.detected {
                                 println!(
                                     "\n✨ [{}: {}] Độ khớp: {:.2} (Ngưỡng: {:.2}{})",
